@@ -1,0 +1,44 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Smart Heating",
+        "description": "Pick the boiler switch, where the flow temperature comes from, and the notify action for your phone. Radiators, zones and profiles start from the built-in seed and can be changed later. The integration starts in dry run: it decides and shows, but sends nothing.",
+        "data": {
+          "boiler_switch": "Boiler switch",
+          "flow_temperature_entity": "Flow temperature (helper or sensor)",
+          "notify_service": "Notify action (e.g. notify.mobile_app_honor_600)"
+        }
+      }
+    },
+    "abort": {"already_configured": "Smart Heating is already set up."}
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Smart Heating",
+        "data": {
+          "boiler_switch": "Boiler switch",
+          "flow_temperature_entity": "Flow temperature (helper or sensor)",
+          "notify_service": "Notify action"
+        }
+      }
+    }
+  },
+  "services": {
+    "set_profile": {"name": "Set profile", "description": "Switch the running heating profile.",
+      "fields": {"profile": {"name": "Profile", "description": "Profile name."}}},
+    "set_mode": {"name": "Set mode", "description": "Auto, Manual, Off or Frost.",
+      "fields": {"mode": {"name": "Mode", "description": "Heating mode."}}},
+    "boost": {"name": "Boost zone", "description": "Raise a zone's target and/or move it up the priority list for a while.",
+      "fields": {
+        "zone": {"name": "Zone", "description": "Zone name."},
+        "target": {"name": "Target", "description": "New target temperature."},
+        "position": {"name": "Position", "description": "New place in the priority list (0 = top)."},
+        "minutes": {"name": "Minutes", "description": "How long. Leave empty for until the profile changes."}}},
+    "cancel_boost": {"name": "Cancel boost", "description": "Cancel a zone's boost, or all boosts.",
+      "fields": {"zone": {"name": "Zone", "description": "Zone name; leave empty for all."}}},
+    "resume": {"name": "Resume", "description": "Cancel all boosts and fire smart_heating_resume for profile rules."},
+    "recalculate": {"name": "Recalculate", "description": "Run the controller now."}
+  }
+}
