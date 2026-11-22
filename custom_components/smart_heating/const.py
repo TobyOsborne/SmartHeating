@@ -13,6 +13,7 @@ DEFAULT_FLOW_SOURCE = "input_number.heating_flow_temperature"
 DEFAULT_NOTIFY = "notify.mobile_app_honor_600"
 
 TICK_SECONDS = 60
+STARTUP_GRACE_SECONDS = 300  # no 'sensor offline' alerts this soon after a restart
 VERIFY_AFTER_SECONDS = 120
 MAX_ATTEMPTS = 3
 

@@ -31,7 +31,7 @@ from .seed import PI_COOLING, seed_config
 from .store import config_from_dict
 from . import panel, websocket
 
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 
 _LOGGER = logging.getLogger(__name__)
 

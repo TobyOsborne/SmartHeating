@@ -201,7 +201,10 @@ def tick(config: Config, inputs: Inputs, state: State | None = None) -> tuple[De
         want_on = False
     if frost_open:
         want_on = True
+    demand = want_on
     want_on = _respect_boiler_times(config, inputs, want_on)
+    held_off = demand and not want_on
+    held_on = want_on and not demand
 
     primary_rads = _usable(config, inputs, primary.radiators)
     open_set: set[str] = set(frost_open)
@@ -215,9 +218,19 @@ def tick(config: Config, inputs: Inputs, state: State | None = None) -> tuple[De
         open_set |= set(primary_rads)
         for r in primary_rads:
             reasons.setdefault(r, f"primary zone {primary.name}")
-        zone_states[primary.name] = "heating" if want_on else "satisfied"
-        reason = (f"{primary.name} {p_temp:.1f}° below {profile.goal:g}° goal" if want_on
-                  else f"{primary.name} {p_temp:.1f}° at {profile.goal:g}° goal")
+        if held_off:
+            zone_states[primary.name] = "waiting"
+            left = max(0, s.min_off_s - (now - inputs.boiler_changed)) / 60
+            reason = (f"{primary.name} {p_temp:.1f}° below {profile.goal:g}° goal; "
+                      f"boiler resting for its minimum off time ({left:.0f} min left)")
+        elif held_on:
+            zone_states[primary.name] = "satisfied"
+            reason = (f"{primary.name} {p_temp:.1f}° at {profile.goal:g}° goal; "
+                      f"boiler finishing its minimum run time")
+        else:
+            zone_states[primary.name] = "heating" if want_on else "satisfied"
+            reason = (f"{primary.name} {p_temp:.1f}° below {profile.goal:g}° goal" if want_on
+                      else f"{primary.name} {p_temp:.1f}° at {profile.goal:g}° goal")
 
     # 2. Choose radiators (only while the boiler runs)
     listed_zones = [e.zone for e in profile.priority]

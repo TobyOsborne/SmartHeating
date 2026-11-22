@@ -134,3 +134,18 @@ async def test_config_flow_creates_single_entry(hass: HomeAssistant) -> None:
     assert result["type"] == "create_entry"
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
     assert result["type"] == "abort"
+
+
+async def test_no_offline_alert_while_sensors_restore_after_restart(hass: HomeAssistant, freezer) -> None:
+    _world(hass)
+    cfg = seed_config()
+    hass.states.async_set(cfg.zones["Office"].thermometer, "unavailable")
+    entry = await _setup(hass)
+    coord = entry.runtime_data
+    assert hass.states.get("sensor.smart_heating_office").state == "offline"
+    assert coord.recent_notifications == []  # restoring, not broken
+    # Still missing well after start-up: now it alerts
+    freezer.tick(timedelta(minutes=6))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert [n["kind"] for n in coord.recent_notifications] == ["sensor_offline"]

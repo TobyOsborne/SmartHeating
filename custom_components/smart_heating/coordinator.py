@@ -34,6 +34,7 @@ from .const import (
     MAX_ATTEMPTS,
     SIGNAL_UPDATE,
     TICK_SECONDS,
+    STARTUP_GRACE_SECONDS,
     VERIFY_AFTER_SECONDS,
 )
 from .controller import WindowDetector, radiator_output_w, tick
@@ -103,6 +104,7 @@ class SmartHeatingCoordinator:
     # ------------------------------------------------------------ lifecycle
 
     async def async_start(self) -> None:
+        self.started = time.time()
         self._sync_from_trvs()
         self._rebuild_windows()
         self._unsubs.append(async_track_time_interval(
@@ -282,6 +284,11 @@ class SmartHeatingCoordinator:
             if st == "window" and zone not in previous_windows:
                 decision.notifications.append(Notification(
                     "window", f"Window open in {zone}?", ["Ignore"]))
+        if now - getattr(self, "started", 0) < STARTUP_GRACE_SECONDS:
+            # Sensors are still being restored after a restart: don't cry wolf
+            if any(n.kind == "sensor_offline" for n in decision.notifications):
+                self.state.offline_notified = False
+            decision.notifications = [n for n in decision.notifications if n.kind != "sensor_offline"]
         for note in decision.notifications:
             await self._notify(note)
 

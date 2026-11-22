@@ -113,6 +113,15 @@ def test_minimum_on_and_off_times():
     assert d.boiler_on  # wants off but has only run 2 min
     d, _ = tick(cfg, make_inputs(cfg, COLD, boiler_on=False, boiler_changed=NOW - 120))
     assert not d.boiler_on  # wants on but was off only 2 min
+    # ...and says so, rather than claiming the room is warm enough
+    assert "minimum off time (8 min left)" in d.reason
+    assert d.zone_states["Office"] == "waiting"
+
+
+def test_minimum_run_time_is_explained():
+    cfg = seed_config()
+    d, _ = tick(cfg, make_inputs(cfg, COLD | {"Office": 19.0}, boiler_on=True, boiler_changed=NOW - 120))
+    assert d.boiler_on and "minimum run time" in d.reason
 
 
 def test_satisfied_zone_needs_hysteresis_to_reenter():

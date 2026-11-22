@@ -52,3 +52,14 @@ A **Heating** item appears in the sidebar:
 - **Settings** – boiler minimums, hold times, frost protection and the outdoor sensor.
 
 Edits are held until you press **Save**; invalid configurations are rejected and nothing changes.
+
+## Profile rules (set up in Home Assistant, labelled `heating_rule`)
+
+| Automation | Does |
+| --- | --- |
+| Heating rule - Night | `schedule.heating_night` (21:00–10:00) → Night, unless away; schedule ends → resume |
+| Heating rule - Away | `binary_sensor.heating_away` (beyond `input_number.heating_away_distance` for 20 min, with `input_boolean.heating_away_mode` on) → Away; back → resume |
+| Heating rule - Office in use | Socket (Office) above 50 W for 5 min, daytime, not away → Office; socket off or 15-min max below 50 W → resume |
+| Heating rule - Resume | `smart_heating.resume` → `script.heating_resume_schedule` |
+
+`script.heating_resume_schedule` picks Away, then Night, then Living Room.
