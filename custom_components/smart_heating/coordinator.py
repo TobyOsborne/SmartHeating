@@ -36,7 +36,8 @@ from .const import (
     TICK_SECONDS,
     VERIFY_AFTER_SECONDS,
 )
-from .controller import WindowDetector, tick
+from .controller import WindowDetector, radiator_output_w, tick
+from .learning import ZoneLearning, estimate
 from .model import Config, Decision, Inputs, Mode, Notification, Override, Reading, State
 from .store import config_to_dict, state_to_dict
 
@@ -66,7 +67,8 @@ class Runtime:
 
 class SmartHeatingCoordinator:
     def __init__(self, hass: HomeAssistant, store: Store, config: Config, runtime: Runtime,
-                 boiler: str, flow_source: str, notify: str) -> None:
+                 boiler: str, flow_source: str, notify: str,
+                 learning: dict[str, ZoneLearning] | None = None) -> None:
         self.hass = hass
         self.store = store
         self.config = config
@@ -91,6 +93,9 @@ class SmartHeatingCoordinator:
 
         self.windows: dict[str, WindowDetector] = {}
         self.window_ignored: dict[str, float] = {}
+
+        self.learning: dict[str, ZoneLearning] = learning or {}
+        self._last_hour: int | None = None
 
         self._unsubs: list = []
         self._soon_unsub = None
@@ -136,6 +141,11 @@ class SmartHeatingCoordinator:
     async def async_reload_config(self, config: Config) -> None:
         """Called after the setup panel or a service changes the configuration."""
         self.config = config
+        if self.runtime.profile not in config.profiles:
+            self.runtime.profile = next(iter(config.profiles))
+        self.runtime.overrides = [o for o in self.runtime.overrides if o.zone in config.zones]
+        self.faulty &= set(config.radiators)
+        self.pending = {k: v for k, v in self.pending.items() if k in config.radiators}
         for unsub in self._unsubs:
             unsub()
         self._unsubs.clear()
@@ -153,6 +163,7 @@ class SmartHeatingCoordinator:
         data = {
             "config": config_to_dict(self.config),
             "runtime": state_to_dict(self.runtime.mode, self.runtime.profile, self.runtime.dry_run),
+            "learning": {name: zl.to_dict() for name, zl in self.learning.items()},
         }
         await self.store.async_save(data)
 
@@ -274,7 +285,65 @@ class SmartHeatingCoordinator:
         for note in decision.notifications:
             await self._notify(note)
 
+        await self._learn(now)
         async_dispatcher_send(self.hass, SIGNAL_UPDATE)
+
+    # ------------------------------------------------------------ learning
+
+    def _trv_open(self, name: str) -> bool:
+        """Real valve state from the TRV's setpoint (learning ignores the dry-run simulation)."""
+        st = self.hass.states.get(self.config.radiators[name].trv)
+        target = st.attributes.get("temperature") if st else None
+        return target is not None and float(target) >= self.config.settings.open_temp - 1
+
+    async def _learn(self, now: float) -> None:
+        s = self.config.settings
+        outdoor = self._reading(s.outdoor_sensor).temp
+        bst = self.hass.states.get(self.boiler)
+        boiler_on = bst is not None and bst.state == STATE_ON
+        flow = self._flow_temp()
+        for zone in self.config.zones.values():
+            zl = self.learning.setdefault(zone.name, ZoneLearning())
+            temp = self._reading(zone.thermometer).temp
+            open_rads = [r for r in zone.radiators if self._trv_open(r)]
+            kw = sum(radiator_output_w(self.config.radiators[r].rated_w, flow, s.drop,
+                                       temp if temp is not None else s.default_room_temp,
+                                       self.config.radiators[r].exponent) for r in open_rads) / 1000
+            zl.observe(now, temp, outdoor, quiet=not boiler_on and not open_rads,
+                       heating=boiler_on and bool(open_rads), delivered_kw=kw)
+        hour = int(now // 3600)
+        if self._last_hour is not None and hour != self._last_hour:
+            label = time.strftime("%d/%m %H:%M", time.localtime(now))
+            for zl in self.learning.values():
+                zl.close_hour(now, label)
+            await self.async_save()
+        self._last_hour = hour
+
+    def learning_summary(self) -> dict[str, dict]:
+        out = {}
+        outdoor = self._reading(self.config.settings.outdoor_sensor).temp
+        for name in self.config.zones:
+            zl = self.learning.get(name)
+            if zl is None:
+                continue
+            est = estimate(zl.cooling)
+            temp = self._reading(self.config.zones[name].thermometer).temp
+            out[name] = {
+                "half_life_h": est.half_life_h,
+                "half_life_factor": est.half_life_factor,
+                "free_heat": est.free_heat,
+                "free_heat_sd": est.free_heat_sd,
+                "confidence": est.confidence,
+                "samples": est.samples,
+                "last_sample": zl.cooling.last,
+                "settling_temp": round(est.settling_temp(outdoor), 1) if outdoor is not None else None,
+                "cooling_now": (round(est.cooling_rate(temp, outdoor), 2)
+                                if temp is not None and outdoor is not None else None),
+                "warmup_per_kw": round(zl.warmup.mean, 2) if zl.warmup.mean is not None else None,
+                "warmup_confidence": zl.warmup.confidence,
+                "warmup_samples": round(zl.warmup.n, 1),
+            }
+        return out
 
     async def _apply(self, decision: Decision, now: float) -> None:
         s = self.config.settings

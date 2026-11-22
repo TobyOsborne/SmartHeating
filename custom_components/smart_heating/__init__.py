@@ -26,8 +26,12 @@ from .const import (
 )
 from .coordinator import Runtime, SmartHeatingCoordinator
 from .model import Mode
-from .seed import seed_config
+from .learning import ZoneLearning, seed_from_pi
+from .seed import PI_COOLING, seed_config
 from .store import config_from_dict
+from . import panel, websocket
+
+VERSION = "0.3.0"
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -54,20 +58,30 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartHeatingConfigEntry)
         dry_run=raw.get("dry_run", True),  # always start new installs in dry run
     )
 
+    if "learning" in data:
+        learning = {name: ZoneLearning.from_dict(v) for name, v in data["learning"].items()}
+    else:
+        learning = {name: seed_from_pi(raw) for name, raw in PI_COOLING.items() if name in config.zones}
+
     opts = {**entry.data, **entry.options}
     coordinator = SmartHeatingCoordinator(
         hass, store, config, runtime,
         boiler=opts.get(CONF_BOILER, DEFAULT_BOILER),
         flow_source=opts.get(CONF_FLOW_SOURCE, DEFAULT_FLOW_SOURCE),
         notify=opts.get(CONF_NOTIFY, DEFAULT_NOTIFY),
+        learning=learning,
     )
     entry.runtime_data = coordinator
-    if "config" not in data:
+    if "config" not in data or "learning" not in data:
         await coordinator.async_save()
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     await coordinator.async_start()
     _register_services(hass)
+    if not hass.data.get(f"{DOMAIN}_ws"):
+        websocket.async_register(hass)
+        hass.data[f"{DOMAIN}_ws"] = True
+    await panel.async_register_panel(hass, VERSION)
     entry.async_on_unload(entry.add_update_listener(_async_reload))
     return True
 
@@ -78,6 +92,7 @@ async def _async_reload(hass: HomeAssistant, entry: SmartHeatingConfigEntry) -> 
 
 async def async_unload_entry(hass: HomeAssistant, entry: SmartHeatingConfigEntry) -> bool:
     await entry.runtime_data.async_stop()
+    panel.async_remove_panel(hass)
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
 

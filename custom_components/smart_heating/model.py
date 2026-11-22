@@ -87,6 +87,7 @@ class Settings:
     open_temp: float = 30.0
     closed_temp: float = 5.0
     default_room_temp: float = 18.0
+    outdoor_sensor: str = "sensor.outdoor_temperature"
 
 
 @dataclass

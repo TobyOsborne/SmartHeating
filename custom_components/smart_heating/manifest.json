@@ -1,11 +1,18 @@
 {
   "domain": "smart_heating",
   "name": "Smart Heating",
-  "codeowners": ["@TobyOsborne"],
+  "codeowners": [
+    "@TobyOsborne"
+  ],
   "config_flow": true,
   "dependencies": [],
   "documentation": "https://github.com/TobyOsborne/SmartHeating",
   "iot_class": "local_push",
   "requirements": [],
-  "version": "0.2.0"
+  "version": "0.3.0",
+  "after_dependencies": [
+    "frontend",
+    "http",
+    "panel_custom"
+  ]
 }

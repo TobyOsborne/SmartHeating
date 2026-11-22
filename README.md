@@ -40,3 +40,15 @@ The setup panel for editing them comes in a later release.
 python3 -m pip install pytest-homeassistant-custom-component
 python3 -m pytest -q
 ```
+
+## Heating panel (0.3.0)
+
+A **Heating** item appears in the sidebar:
+
+- **Now** – profile, mode and dry run; what the boiler wants and why; open radiator output vs what the boiler needs; every room with its target and a Boost button; every radiator and why it's open or closed.
+- **Profiles** – edit, add, duplicate or delete profiles, reorder the priority list, set targets, buffer rooms and spare-heat mode.
+- **Zones / Radiators** – thermometers, which radiators heat each room, window detection, TRVs and rated outputs.
+- **Learning** – per room: cooling half-life, free heat, settling temperature, warm-up rate and a confidence rating for each. Seeded from the old Pi's numbers.
+- **Settings** – boiler minimums, hold times, frost protection and the outdoor sensor.
+
+Edits are held until you press **Save**; invalid configurations are rejected and nothing changes.

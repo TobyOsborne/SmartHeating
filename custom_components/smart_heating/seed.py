@@ -68,3 +68,16 @@ def seed_config() -> Config:
         ]
     }
     return Config(radiators=radiators, zones=zones, profiles=profiles, settings=Settings())
+
+
+# The Pi's cooling-model sums on 22 Nov 2026 (input_text.cooling_model_*), so the
+# learning carries on from where the Pi left off instead of starting at zero.
+PI_COOLING = {
+    "Living Room": {"n": 112.49, "x": 864.219, "y": -15.9195, "xx": 7195.83, "xy": -123.6118, "yy": 2.87347, "t": "22/11 16:05"},
+    "Kitchen": {"n": 111.83, "x": 860.676, "y": -16.1402, "xx": 7221.9, "xy": -131.3425, "yy": 3.22405, "t": "22/11 16:05"},
+    "Landing": {"n": 112.49, "x": 728.968, "y": -13.9123, "xx": 5310.45, "xy": -90.9948, "yy": 2.37634, "t": "22/11 16:05"},
+    "Bathroom": {"n": 85.78, "x": 440.095, "y": -7.855, "xx": 2482.59, "xy": -45.6026, "yy": 1.18448, "t": "22/11 16:05"},
+    "Main Bedroom": {"n": 87.26, "x": 561.18, "y": -4.9171, "xx": 3860.34, "xy": -39.2601, "yy": 1.19671, "t": "22/11 18:05"},
+    "Guest Bedroom": {"n": 87.26, "x": 466.266, "y": -7.5267, "xx": 2727.35, "xy": -45.9012, "yy": 1.53701, "t": "22/11 18:05"},
+    "Office": {"n": 86.52, "x": 415.912, "y": -13.3586, "xx": 2288.83, "xy": -75.9102, "yy": 3.62743, "t": "22/11 18:05"},
+}
