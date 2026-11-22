@@ -11,7 +11,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .entity import SmartHeatingEntity, slug
 
-ZONE_STATES = ["heating", "satisfied", "waiting", "idle", "window", "frost", "offline", "boost"]
+ZONE_STATES = ["heating", "satisfied", "waiting", "idle", "window", "frost", "offline", "boost", "minimum"]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry, async_add_entities: AddEntitiesCallback) -> None:

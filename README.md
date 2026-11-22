@@ -63,3 +63,9 @@ Edits are held until you press **Save**; invalid configurations are rejected and
 | Heating rule - Resume | `smart_heating.resume` → `script.heating_resume_schedule` |
 
 `script.heating_resume_schedule` picks Away, then Night, then Living Room.
+
+## Room minimums (0.4.0)
+
+Each zone can have a **minimum** (Zones tab). It applies in every profile: whenever the boiler is
+running, rooms below their minimum open first, coldest first, and stop once they reach it (with the
+zone's hysteresis). A minimum never starts the boiler on its own; frost protection does that.

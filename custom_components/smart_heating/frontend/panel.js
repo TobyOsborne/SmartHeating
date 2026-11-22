@@ -11,7 +11,7 @@ const SPARE = [
 ];
 const STATE_LABEL = {
   heating: "Heating", satisfied: "Warm enough", waiting: "Waiting", idle: "Idle",
-  window: "Window open", frost: "Frost", offline: "Sensor offline", boost: "Boost",
+  window: "Window open", frost: "Frost", minimum: "Below minimum", offline: "Sensor offline", boost: "Boost",
 };
 const SETTINGS = [
   ["Boiler", [
@@ -142,7 +142,7 @@ class SmartHeatingPanel extends HTMLElement {
       case "pri-up": if (i > 0) { [prof.priority[i - 1], prof.priority[i]] = [prof.priority[i], prof.priority[i - 1]]; this._touch(); } break;
       case "pri-down": if (i < prof.priority.length - 1) { [prof.priority[i + 1], prof.priority[i]] = [prof.priority[i], prof.priority[i + 1]]; this._touch(); } break;
       case "pri-del": prof.priority.splice(i, 1); this._touch(); break;
-      case "zone-add": d.zones.push({ name: this._uniq("New zone", d.zones), thermometer: "", radiators: [], hysteresis: 0.3, window_detection: true, window_drop: 0.8, window_window_s: 300, damp_alert: true }); this._touch(); break;
+      case "zone-add": d.zones.push({ name: this._uniq("New zone", d.zones), thermometer: "", radiators: [], hysteresis: 0.3, window_detection: true, window_drop: 0.8, window_window_s: 300, damp_alert: true, minimum: null }); this._touch(); break;
       case "zone-del": {
         const z = d.zones[i];
         const users = d.profiles.filter((p) => p.primary_zone === z.name).map((p) => p.name);
@@ -284,10 +284,11 @@ class SmartHeatingPanel extends HTMLElement {
     const zoneRow = (z) => {
       const info = D.zones[z], tt = t[z] || {}, b = this._boost[z];
       const zr = (D.config.zones.find((x) => x.name === z) || { radiators: [] }).radiators;
+      const zmin = (D.config.zones.find((x) => x.name === z) || {}).minimum;
       const openN = zr.filter((r) => D.radiators[r] && D.radiators[r].open).length;
       return `<div class="row zone">
         <div class="grow"><div class="title">${esc(z)} ${tt.primary ? `<span class="tag">primary</span>` : ""}${tt.buffer ? `<span class="tag">buffer</span>` : ""}${info.boost ? `<span class="tag hot">boost</span>` : ""}</div>
-          <div class="sub">${zr.length ? `${openN}/${zr.length} radiators open` : "no radiators"}</div></div>
+          <div class="sub">${zr.length ? `${openN}/${zr.length} radiators open` : "no radiators"}${zmin != null ? ` · min ${zmin}°` : ""}</div></div>
         <div class="temp">${num(info.temperature)}°<span class="sub"> / ${tt.target != null ? num(tt.target) + "°" : "–"}</span></div>
         <span class="chip ${esc(info.state)}">${esc(STATE_LABEL[info.state] || info.state || "–")}</span>
         ${info.boost ? `<button class="small ghost" data-act="boost-cancel" data-zone="${esc(z)}">End boost</button>`
@@ -379,8 +380,9 @@ class SmartHeatingPanel extends HTMLElement {
           <label>Name <input id="z-n-${i}" data-f="zone.name" data-i="${i}" value="${esc(z.name)}"></label>
           <label>Thermometer <input id="z-t-${i}" list="temps" data-f="zone.thermometer" data-i="${i}" value="${esc(z.thermometer)}"></label>
           <label>Hysteresis °C <input id="z-h-${i}" type="number" step="0.1" data-f="zone.hysteresis" data-i="${i}" value="${z.hysteresis}"></label>
+          <label>Minimum °C (blank = none) <input id="z-m-${i}" type="number" step="0.5" data-f="zone.minimum" data-i="${i}" value="${z.minimum ?? ""}" placeholder="none"></label>
         </div>
-        <div class="sub">Reading now: ${num(this._data.zones[z.name]?.temperature)}°C</div>
+        <div class="sub">Reading now: ${num(this._data.zones[z.name]?.temperature)}°C${z.minimum != null ? ` · kept at ${z.minimum}° or above whenever the boiler runs, in every profile` : ""}</div>
         <h3>Radiators</h3>
         <div class="chips">${d.radiators.map((r) => `<button data-act="zr-toggle" data-i="${i}" data-rad="${esc(r.name)}" class="${z.radiators.includes(r.name) ? "on" : ""}">${esc(r.name)}</button>`).join("")}</div>
         <h3>Windows & damp</h3>
@@ -393,6 +395,7 @@ class SmartHeatingPanel extends HTMLElement {
         <div class="actions"><span class="grow"></span><button class="ghost danger" data-act="zone-del" data-i="${i}">Delete zone</button></div>
       </section>`).join("")}
       <div class="actions"><button class="ghost" data-act="zone-add">+ Add zone</button></div>
+      <p class="hint">A room's minimum applies in every profile: whenever the boiler is running, rooms below their minimum open first, coldest first. A minimum never starts the boiler on its own (frost protection does that).</p>
       <p class="hint">Renaming a zone starts its learning afresh.</p>`;
   }
 
@@ -507,7 +510,7 @@ label.inline { flex-direction:row; align-items:center; gap:6px; }
 .tag.hot { background:var(--state-climate-heat-color, #ff8100); color:#fff; border:none; }
 .tag.bad { background:var(--error-color); color:#fff; border:none; }
 .chip { font-size:12px; padding:3px 10px; border-radius:12px; background:var(--secondary-background-color); white-space:nowrap; }
-.chip.heating, .chip.boost { background:var(--state-climate-heat-color, #ff8100); color:#fff; }
+.chip.heating, .chip.boost, .chip.minimum { background:var(--state-climate-heat-color, #ff8100); color:#fff; }
 .chip.satisfied { background:var(--success-color, #43a047); color:#fff; }
 .chip.window, .chip.offline, .chip.frost { background:var(--error-color); color:#fff; }
 .chips { display:flex; flex-wrap:wrap; gap:8px; }

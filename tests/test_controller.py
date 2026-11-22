@@ -269,3 +269,44 @@ def test_window_detector_flags_fast_drop_and_clears_after_hold():
     assert w.update(240, 17.1)  # 0.9° in 4 min
     assert w.is_open(240 + 1199)
     assert not w.is_open(240 + 1201)
+
+
+# ------------------------------------------------------------ room minimums
+
+
+def _with_minimums(cfg, **mins):
+    for name, m in mins.items():
+        cfg.zones[name.replace("_", " ")].minimum = m
+    return cfg
+
+
+def test_rooms_below_minimum_open_whenever_the_boiler_runs_in_any_profile():
+    cfg = _with_minimums(seed_config(), Kitchen=14, Bathroom=14, Main_Bedroom=14, Guest_Bedroom=13)
+    temps = COLD | {"Kitchen": 12.0, "Bathroom": 13.5}
+    # Office profile, primary only: normally just the Office radiator
+    cfg.profiles["Office"].spare_heat = SpareHeat.PRIMARY_ONLY
+    d, _ = tick(cfg, make_inputs(cfg, temps))
+    assert d.boiler_on
+    assert {"Office", "Kitchen", "Bathroom", "Main Bedroom"} <= d.open
+    assert "Guest Bedroom" not in d.open  # 13.0 is not below a 13° minimum
+    assert d.zone_states["Kitchen"] == "minimum"
+    assert d.radiator_reasons["Kitchen"] == "minimum: Kitchen 12.0° below its 14° minimum"
+
+
+def test_minimums_never_start_the_boiler():
+    cfg = _with_minimums(seed_config(), Kitchen=14)
+    d, _ = tick(cfg, make_inputs(cfg, COLD | {"Office": 19.0, "Kitchen": 10.0}))
+    assert not d.boiler_on
+    assert "Kitchen" not in d.open
+
+
+def test_minimum_uses_hysteresis_and_skips_open_windows():
+    cfg = _with_minimums(seed_config(), Kitchen=14)
+    d, st = tick(cfg, make_inputs(cfg, COLD | {"Kitchen": 13.0}))
+    assert "Kitchen" in d.open
+    d, st = tick(cfg, make_inputs(cfg, COLD | {"Kitchen": 14.0}, open_=d.open), st)
+    assert "Kitchen" not in d.open  # reached its minimum
+    d, st = tick(cfg, make_inputs(cfg, COLD | {"Kitchen": 13.8}, open_=d.open), st)
+    assert "Kitchen" not in d.open  # within hysteresis
+    d, _ = tick(cfg, make_inputs(cfg, COLD | {"Kitchen": 12.0}, windows={"Kitchen": True}), st)
+    assert "Kitchen" not in d.open

@@ -232,6 +232,26 @@ def tick(config: Config, inputs: Inputs, state: State | None = None) -> tuple[De
             reason = (f"{primary.name} {p_temp:.1f}° below {profile.goal:g}° goal" if want_on
                       else f"{primary.name} {p_temp:.1f}° at {profile.goal:g}° goal")
 
+    # 2a. Room minimums: whenever the boiler runs, rooms below their own minimum open first,
+    #     coldest (furthest below) first, whatever the profile. They never start the boiler.
+    if want_on:
+        below = []
+        for zone in config.zones.values():
+            if zone.minimum is None or zone.name == primary.name:
+                continue
+            t = temps[zone.name]
+            if inputs.windows.get(zone.name, False):
+                continue
+            if _satisfied(state, f"min:{zone.name}", t, zone.minimum, zone.hysteresis):
+                continue
+            below.append((zone.minimum - t, zone))
+        for _gap, zone in sorted(below, key=lambda x: -x[0]):
+            zone_states[zone.name] = "minimum"
+            for r in _usable(config, inputs, zone.radiators):
+                if r not in open_set:
+                    open_set.add(r)
+                    reasons[r] = f"minimum: {zone.name} {temps[zone.name]:.1f}° below its {zone.minimum:g}° minimum"
+
     # 2. Choose radiators (only while the boiler runs)
     listed_zones = [e.zone for e in profile.priority]
     all_satisfied = True

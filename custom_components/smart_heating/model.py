@@ -42,6 +42,7 @@ class Zone:
     window_drop: float = 0.8  # °C ...
     window_window_s: float = 300  # ... within this many seconds
     damp_alert: bool = True
+    minimum: float | None = None  # kept at least this warm whenever the boiler runs, in every profile
 
 
 @dataclass
