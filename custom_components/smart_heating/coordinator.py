@@ -26,6 +26,7 @@ from homeassistant.helpers.event import (
     async_track_time_interval,
 )
 from homeassistant.helpers.storage import Store
+from homeassistant.util import dt as dt_util
 
 from .const import (
     ACTION_IGNORE_WINDOW,
@@ -39,6 +40,7 @@ from .const import (
 )
 from .sensors import ReadingFilter
 from .controller import WindowDetector, radiator_output_w, tick
+from .energy import EnergyLedger, suggest_flow
 from .learning import ZoneLearning, estimate
 from .model import Config, Decision, Inputs, Mode, Notification, Override, Reading, State
 from .store import config_to_dict, state_to_dict
@@ -70,7 +72,8 @@ class Runtime:
 class SmartHeatingCoordinator:
     def __init__(self, hass: HomeAssistant, store: Store, config: Config, runtime: Runtime,
                  boiler: str, flow_source: str, notify: str,
-                 learning: dict[str, ZoneLearning] | None = None) -> None:
+                 learning: dict[str, ZoneLearning] | None = None,
+                 energy: EnergyLedger | None = None) -> None:
         self.hass = hass
         self.store = store
         self.config = config
@@ -98,6 +101,11 @@ class SmartHeatingCoordinator:
         self.window_ignored: dict[str, float] = {}
 
         self.learning: dict[str, ZoneLearning] = learning or {}
+        self.energy: EnergyLedger = energy or EnergyLedger()
+        self._energy_t: float | None = None
+        self._forecast_temps: list[tuple[str, float]] = []
+        self._forecast_fetched = 0.0
+        self.energy_cache: dict = {}
         self._last_hour: int | None = None
 
         self._unsubs: list = []
@@ -168,6 +176,7 @@ class SmartHeatingCoordinator:
             "config": config_to_dict(self.config),
             "runtime": state_to_dict(self.runtime.mode, self.runtime.profile, self.runtime.dry_run),
             "learning": {name: zl.to_dict() for name, zl in self.learning.items()},
+            "energy": self.energy.to_dict(),
         }
         await self.store.async_save(data)
 
@@ -308,7 +317,109 @@ class SmartHeatingCoordinator:
             await self._notify(note)
 
         await self._learn(now)
+        await self._track_energy(now)
         async_dispatcher_send(self.hass, SIGNAL_UPDATE)
+
+    # ------------------------------------------------------------ energy
+
+    def _float_state(self, entity_id: str) -> float | None:
+        st = self.hass.states.get(entity_id) if entity_id else None
+        try:
+            return float(st.state) if st else None
+        except (TypeError, ValueError):
+            return None
+
+    async def _track_energy(self, now: float) -> None:
+        s = self.config.settings
+        date = time.strftime("%Y-%m-%d", time.localtime(now))
+        real_on = (self.hass.states.get(self.boiler) or None)
+        boiler_on = real_on is not None and real_on.state == STATE_ON
+        if self._energy_t is not None and boiler_on:
+            self.energy.add_runtime(date, min(now - self._energy_t, 180))
+        self._energy_t = now
+        outdoor = self._reading(s.outdoor_sensor).temp
+        if outdoor is not None:
+            self.energy.add_outdoor(date, outdoor)
+        # Smart meter: file the last full day against its date (data runs a day or so behind)
+        until = self.hass.states.get(s.gas_until_sensor)
+        kwh = self._float_state(s.gas_day_sensor)
+        if until is not None and kwh is not None:
+            try:
+                when = dt_util.parse_datetime(until.state)
+            except (TypeError, ValueError):
+                when = None
+            if when is not None:
+                full_day = (dt_util.as_local(when) - timedelta(days=1)).strftime("%Y-%m-%d")
+                self.energy.set_gas(full_day, kwh, self._float_state(s.gas_cost_day_sensor))
+        if now - self._forecast_fetched > 3600:
+            self._forecast_fetched = now
+            await self._fetch_forecast()
+        self.energy_cache = self.energy_summary()
+
+    async def _fetch_forecast(self) -> None:
+        entity = self.config.settings.weather_entity
+        if not entity or self.hass.states.get(entity) is None:
+            return
+        try:
+            resp = await self.hass.services.async_call(
+                "weather", "get_forecasts", {"entity_id": entity, "type": "daily"},
+                blocking=True, return_response=True)
+        except Exception as err:  # noqa: BLE001 - forecast is optional
+            _LOGGER.debug("No daily forecast from %s: %s", entity, err)
+            return
+        temps = []
+        for item in (resp or {}).get(entity, {}).get("forecast", [])[:7]:
+            hi, lo = item.get("temperature"), item.get("templow")
+            if hi is None:
+                continue
+            mean = (hi + lo) / 2 if lo is not None else hi - 3
+            day = dt_util.as_local(dt_util.parse_datetime(item["datetime"])).strftime("%Y-%m-%d")
+            temps.append((day, float(mean)))
+        self._forecast_temps = temps
+
+    def energy_summary(self) -> dict:
+        s = self.config.settings
+        rate = self._float_state(s.gas_rate_sensor)
+        standing = self._float_state(s.gas_standing_sensor)
+        date = time.strftime("%Y-%m-%d")
+        today = self.energy.days.get(date)
+        base, burn, gas_days, learned = self.energy.gas_model()
+        temps = self._forecast_temps or []
+        if not temps:
+            outdoor = self._reading(s.outdoor_sensor).temp
+            if outdoor is not None:
+                temps = [(f"day {i + 1}", outdoor) for i in range(7)]
+        recent = [{"date": d, "hours": round(r.hours, 2), "outdoor": round(r.out_mean, 1) if r.out_mean is not None else None,
+                   "gas_kwh": r.gas_kwh, "cost": r.cost}
+                  for d, r in sorted(self.energy.days.items())[-14:]]
+        return {
+            "today": {"date": date, **self.energy.estimate_day(today.hours if today else 0.0, rate, standing)},
+            "forecast": self.energy.forecast(temps, rate, standing),
+            "gas_model": {"base_kwh": round(base, 1), "burn_kw": round(burn, 2), "days": gas_days, "learned": learned},
+            "unit_rate": rate, "standing": standing,
+            "recent": recent,
+            "flow": self.flow_advice(),
+        }
+
+    def flow_advice(self) -> dict:
+        profile = self.config.profiles.get(self.runtime.profile)
+        if profile is None:
+            return {"status": "no_profile", "suggested": None, "reason": ""}
+        zone = self.config.zones[profile.primary_zone]
+        zl = self.learning.get(zone.name)
+        if zl is None:
+            return {"status": "learning", "suggested": None, "reason": "No learning for this room yet."}
+        est = estimate(zl.cooling)
+        s = self.config.settings
+        rads = [(self.config.radiators[r].rated_w, self.config.radiators[r].exponent)
+                for r in zone.radiators if self.config.radiators[r].enabled]
+        out = suggest_flow(half_life_h=est.half_life_h, free_heat=est.free_heat,
+                           warmup_per_kw=zl.warmup.mean, warmup_confidence=zl.warmup.confidence,
+                           goal=profile.goal, outdoor=self._reading(s.outdoor_sensor).temp,
+                           radiators=rads, drop=s.drop, current_flow=self._flow_temp())
+        out["zone"] = zone.name
+        out["current"] = self._flow_temp()
+        return out
 
     # ------------------------------------------------------------ learning
 

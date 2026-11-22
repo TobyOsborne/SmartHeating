@@ -89,6 +89,13 @@ class Settings:
     closed_temp: float = 5.0
     default_room_temp: float = 18.0
     outdoor_sensor: str = "sensor.outdoor_temperature"
+    # Costs: smart meter gas (DCC / Glow) sensors and a weather entity for the forecast
+    gas_day_sensor: str = "sensor.house_dcc_sourced_gas_last_full_day"
+    gas_cost_day_sensor: str = "sensor.house_dcc_sourced_gas_cost_last_full_day"
+    gas_until_sensor: str = "sensor.house_dcc_sourced_gas_data_until"
+    gas_rate_sensor: str = "sensor.house_dcc_sourced_gas_unit_rate"
+    gas_standing_sensor: str = "sensor.house_dcc_sourced_gas_standing_charge"
+    weather_entity: str = "weather.home"
 
 
 @dataclass

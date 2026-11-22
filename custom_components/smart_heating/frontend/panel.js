@@ -1,7 +1,7 @@
 // Smart Heating sidebar panel. Plain web component, no build step.
 const TABS = [
   ["now", "Now"], ["profiles", "Profiles"], ["zones", "Zones"],
-  ["radiators", "Radiators"], ["learning", "Learning"], ["settings", "Settings"],
+  ["radiators", "Radiators"], ["learning", "Learning"], ["costs", "Costs & flow"], ["settings", "Settings"],
 ];
 const MODES = [["auto", "Auto"], ["manual", "Manual"], ["off", "Off"], ["frost", "Frost"]];
 const SPARE = [
@@ -385,12 +385,11 @@ class SmartHeatingPanel extends HTMLElement {
         <div class="sub">Reading now: ${num(this._data.zones[z.name]?.temperature)}°C${z.minimum != null ? ` · kept at ${z.minimum}° or above whenever the boiler runs, in every profile` : ""}</div>
         <h3>Radiators</h3>
         <div class="chips">${d.radiators.map((r) => `<button data-act="zr-toggle" data-i="${i}" data-rad="${esc(r.name)}" class="${z.radiators.includes(r.name) ? "on" : ""}">${esc(r.name)}</button>`).join("")}</div>
-        <h3>Windows & damp</h3>
+        <h3>Open windows</h3>
         <div class="grid">
           <label class="inline"><input type="checkbox" data-f="zone.window_detection" data-i="${i}" ${z.window_detection ? "checked" : ""}> Detect open windows</label>
           <label>Drop of °C <input id="z-wd-${i}" type="number" step="0.1" data-f="zone.window_drop" data-i="${i}" value="${z.window_drop}"></label>
           <label>Within (min) <input id="z-ww-${i}" type="number" step="1" data-scale="60" data-f="zone.window_window_s" data-i="${i}" value="${z.window_window_s / 60}"></label>
-          <label class="inline"><input type="checkbox" data-f="zone.damp_alert" data-i="${i}" ${z.damp_alert ? "checked" : ""}> Damp alerts</label>
         </div>
         <div class="actions"><span class="grow"></span><button class="ghost danger" data-act="zone-del" data-i="${i}">Delete zone</button></div>
       </section>`).join("")}
@@ -438,11 +437,42 @@ class SmartHeatingPanel extends HTMLElement {
             <dt>Cooling now</dt><dd>${l.cooling_now != null ? num(l.cooling_now, 2) + " °C/h" : "–"}</dd>
             <dt>Samples</dt><dd>${num(l.samples, 0)} <span class="sub">last ${esc(ago(l.last_sample))}</span></dd>
           </dl>
-          <div class="lrow"><span>Warm-up confidence</span><b>${Math.round((l.warmup_confidence || 0) * 100)}%</b></div>${bar((l.warmup_confidence || 0) * 100)}
+          <div class="lrow"><span>Warm-up confidence</span><b>${Math.round(l.warmup_confidence || 0)}%</b></div>${bar(l.warmup_confidence || 0)}
           <dl><dt>Warm-up</dt><dd>${l.warmup_per_kw != null ? num(l.warmup_per_kw, 2) + " °C/h per kW" : "still learning"}</dd>
             <dt>Samples</dt><dd>${num(l.warmup_samples, 0)}</dd></dl>
         </section>`;
       }).join("")}</div>`;
+  }
+
+  // ---------------------------------------------------------------- Costs & flow
+  _tab_costs() {
+    const E = this._data.energy || {}, t = E.today || {}, f = E.forecast || {}, g = E.gas_model || {}, fl = E.flow || {};
+    const money = (v) => (v == null ? "–" : "£" + Number(v).toFixed(2));
+    const days = f.days || [];
+    const maxCost = Math.max(0.01, ...days.map((d) => d.cost || 0));
+    return `
+      <div class="cards">
+        <section class="card"><h2>Today so far</h2>
+          <div class="big-num">${money(t.cost)}</div>
+          <div class="sub">${num(t.hours)} h of boiler · about ${num(t.gas_kwh)} kWh of gas</div>
+          <p class="hint">Estimated: ${num(g.base_kwh)} kWh a day for hot water and cooking, plus ${num(g.burn_kw)} kW while the boiler fires${g.learned ? `, learned from ${g.days} days of smart-meter readings` : " (typical figures until a few days of smart-meter readings are in)"}. Gas at ${E.unit_rate != null ? (E.unit_rate * 100).toFixed(1) + "p/kWh" : "–"} plus ${E.standing != null ? (E.standing * 100).toFixed(1) + "p" : "–"} a day standing charge.</p>
+        </section>
+        <section class="card"><h2>Next 7 days</h2>
+          ${f.status === "learning" ? `<div class="big-num">–</div><p class="hint">Learning how the boiler's hours follow the weather: ${f.days_recorded || 0} of ${f.needed} full days recorded.</p>` : `
+          <div class="big-num">${money(f.total)}</div>
+          <div class="sub">${f.status === "rough" ? "rough until the smart-meter fit is learned" : "from your recent heating habits and the weather forecast"}</div>
+          <div class="fc">${days.map((d) => `<div class="fcd"><div class="fcbar" style="height:${((d.cost || 0) / maxCost) * 60}px"></div><div class="sub">${esc(String(d.date).slice(5))}</div><div class="sub">${num(d.outdoor, 0)}°</div><div>${money(d.cost)}</div></div>`).join("")}</div>`}
+        </section>
+        <section class="card"><h2>Flow temperature</h2>
+          <div class="big-num">${fl.suggested != null ? fl.suggested + "°" : "–"}</div>
+          <div class="sub">suggested for ${esc(fl.zone || "the primary room")} · boiler set to ${num(fl.current, 0)}°</div>
+          <p class="hint">${esc(fl.reason || "")}</p>
+        </section>
+      </div>
+      ${(E.recent || []).length ? `<section class="card"><h2>Recent days</h2>
+        <div class="row sub"><span class="grow">Date</span><span class="num">Boiler</span><span class="num">Outside</span><span class="num">Gas (meter)</span><span class="num">Cost</span></div>
+        ${E.recent.slice().reverse().map((d) => `<div class="row"><span class="grow">${esc(d.date)}</span><span class="num">${num(d.hours)} h</span><span class="num">${d.outdoor != null ? num(d.outdoor) + "°" : "–"}</span><span class="num">${d.gas_kwh != null ? num(d.gas_kwh) + " kWh" : "–"}</span><span class="num">${money(d.cost)}</span></div>`).join("")}
+      </section>` : ""}`;
   }
 
   // ---------------------------------------------------------------- Settings
@@ -453,6 +483,12 @@ class SmartHeatingPanel extends HTMLElement {
       </div></section>`).join("")}
       <section class="card"><h2>Sensors</h2><div class="grid">
         <label>Outdoor temperature <input id="s-out" list="temps" data-f="settings.outdoor_sensor" value="${esc(s.outdoor_sensor)}"></label>
+        <label>Weather (for the cost forecast) <input id="s-wx" data-f="settings.weather_entity" value="${esc(s.weather_entity)}"></label>
+        <label>Gas used, last full day <input id="s-g1" data-f="settings.gas_day_sensor" value="${esc(s.gas_day_sensor)}"></label>
+        <label>Gas cost, last full day <input id="s-g2" data-f="settings.gas_cost_day_sensor" value="${esc(s.gas_cost_day_sensor)}"></label>
+        <label>Gas data until <input id="s-g3" data-f="settings.gas_until_sensor" value="${esc(s.gas_until_sensor)}"></label>
+        <label>Gas unit rate (£/kWh) <input id="s-g4" data-f="settings.gas_rate_sensor" value="${esc(s.gas_rate_sensor)}"></label>
+        <label>Gas standing charge (£/day) <input id="s-g5" data-f="settings.gas_standing_sensor" value="${esc(s.gas_standing_sensor)}"></label>
       </div><datalist id="temps">${this._data.entities.temperature.map((e) => `<option value="${esc(e)}">`).join("")}</datalist>
       <p class="hint">Boiler relay, flow temperature and notifications are set in Settings → Devices & services → Smart Heating → Configure.</p></section>`;
   }
@@ -469,7 +505,7 @@ nav button { background:none; border:none; border-bottom:2px solid transparent; 
 nav button.on { color:var(--primary-color); border-bottom-color:var(--primary-color); }
 main { max-width:1000px; margin:0 auto; padding:16px 16px 96px; }
 .card { background:var(--card-background-color); border-radius:var(--ha-card-border-radius, 12px); box-shadow:var(--ha-card-box-shadow, none); border:1px solid var(--divider-color); padding:16px; margin-bottom:16px; }
-.cards { display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:16px; }
+.cards { display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:16px; margin-bottom:16px; }
 .cards .card { margin:0; }
 h2 { font-size:16px; font-weight:500; margin:0 0 12px; }
 h3 { font-size:13px; font-weight:500; text-transform:uppercase; letter-spacing:.04em; color:var(--secondary-text-color); margin:16px 0 8px; }
@@ -536,6 +572,10 @@ label.inline { flex-direction:row; align-items:center; gap:6px; }
 .conf { height:8px; border-radius:4px; background:var(--secondary-background-color); overflow:hidden; margin:4px 0 10px; }
 .conf div { height:100%; }
 .conf .hi { background:var(--success-color, #43a047); } .conf .mid { background:var(--warning-color, #ff9800); } .conf .lo { background:var(--error-color, #db4437); }
+.big-num { font-size:32px; font-weight:300; margin:4px 0; }
+.fc { display:flex; gap:6px; align-items:flex-end; margin-top:12px; }
+.fcd { flex:1; text-align:center; font-size:12px; }
+.fcbar { background:var(--state-climate-heat-color, #ff8100); border-radius:3px 3px 0 0; margin:0 auto 4px; width:70%; min-height:2px; }
 .lrow { display:flex; justify-content:space-between; font-size:13px; }
 dl { display:grid; grid-template-columns:auto 1fr; gap:4px 12px; margin:0 0 12px; font-size:13.5px; }
 dt { color:var(--secondary-text-color); } dd { margin:0; }

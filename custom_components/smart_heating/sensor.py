@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
-from homeassistant.const import UnitOfPower
+from homeassistant.const import UnitOfPower, UnitOfTemperature, UnitOfTime
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -18,6 +18,7 @@ async def async_setup_entry(hass: HomeAssistant, entry, async_add_entities: AddE
     coord = entry.runtime_data
     entities: list[SensorEntity] = [CapacitySensor(coord), ReasonSensor(coord)]
     entities += [ZoneSensor(coord, name) for name in coord.config.zones]
+    entities += [BoilerHoursSensor(coord), CostTodaySensor(coord), CostForecastSensor(coord), FlowAdviceSensor(coord)]
     async_add_entities(entities)
 
 
@@ -122,3 +123,83 @@ class ZoneSensor(SmartHeatingEntity, SensorEntity):
                 "minimum": zone.minimum,
                 "ignored_readings": (f.rejected if (f := c.filters.get(zone.thermometer)) else 0),
                 "last_ignored": f.last_rejected if f else None}
+
+
+class _EnergySensor(SmartHeatingEntity, SensorEntity):
+    def _e(self) -> dict:
+        return self.coordinator.energy_cache or {}
+
+
+class BoilerHoursSensor(_EnergySensor):
+    _attr_name = "Boiler hours today"
+    _attr_icon = "mdi:fire-circle"
+    _attr_device_class = SensorDeviceClass.DURATION
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_native_unit_of_measurement = UnitOfTime.HOURS
+    _attr_suggested_display_precision = 1
+
+    def __init__(self, coord) -> None:
+        super().__init__(coord, "boiler_hours_today")
+
+    @property
+    def native_value(self) -> float | None:
+        return self._e().get("today", {}).get("hours")
+
+
+class CostTodaySensor(_EnergySensor):
+    _attr_name = "Heating cost today"
+    _attr_icon = "mdi:cash"
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_native_unit_of_measurement = "GBP"
+    _attr_suggested_display_precision = 2
+
+    def __init__(self, coord) -> None:
+        super().__init__(coord, "cost_today")
+
+    @property
+    def native_value(self) -> float | None:
+        return self._e().get("today", {}).get("cost")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        e = self._e()
+        return {**e.get("today", {}), **{f"model_{k}": v for k, v in e.get("gas_model", {}).items()},
+                "unit_rate": e.get("unit_rate"), "standing_charge": e.get("standing"),
+                "recent_days": e.get("recent", [])}
+
+
+class CostForecastSensor(_EnergySensor):
+    _attr_name = "Heating cost next 7 days"
+    _attr_icon = "mdi:chart-timeline-variant"
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_native_unit_of_measurement = "GBP"
+    _attr_suggested_display_precision = 2
+
+    def __init__(self, coord) -> None:
+        super().__init__(coord, "cost_forecast")
+
+    @property
+    def native_value(self) -> float | None:
+        return self._e().get("forecast", {}).get("total")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return dict(self._e().get("forecast", {}))
+
+
+class FlowAdviceSensor(_EnergySensor):
+    _attr_name = "Suggested flow temperature"
+    _attr_icon = "mdi:thermometer-water"
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+
+    def __init__(self, coord) -> None:
+        super().__init__(coord, "flow_advice")
+
+    @property
+    def native_value(self) -> int | None:
+        return self._e().get("flow", {}).get("suggested")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return dict(self._e().get("flow", {}))

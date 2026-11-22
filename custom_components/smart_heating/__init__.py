@@ -26,12 +26,13 @@ from .const import (
 )
 from .coordinator import Runtime, SmartHeatingCoordinator
 from .model import Mode
+from .energy import EnergyLedger
 from .learning import ZoneLearning, seed_from_pi
 from .seed import PI_COOLING, seed_config
 from .store import config_from_dict
 from . import panel, websocket
 
-VERSION = "0.4.1"
+VERSION = "0.5.0"
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -63,6 +64,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartHeatingConfigEntry)
     else:
         learning = {name: seed_from_pi(raw) for name, raw in PI_COOLING.items() if name in config.zones}
 
+    energy = EnergyLedger.from_dict(data.get("energy", {}))
+
     opts = {**entry.data, **entry.options}
     coordinator = SmartHeatingCoordinator(
         hass, store, config, runtime,
@@ -70,6 +73,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartHeatingConfigEntry)
         flow_source=opts.get(CONF_FLOW_SOURCE, DEFAULT_FLOW_SOURCE),
         notify=opts.get(CONF_NOTIFY, DEFAULT_NOTIFY),
         learning=learning,
+        energy=energy,
     )
     entry.runtime_data = coordinator
     if "config" not in data or "learning" not in data:

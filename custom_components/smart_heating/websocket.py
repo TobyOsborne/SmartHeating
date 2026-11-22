@@ -82,6 +82,7 @@ def build_state(hass: HomeAssistant, coord) -> dict[str, Any]:
         "zones": zones,
         "radiators": radiators,
         "learning": coord.learning_summary(),
+        "energy": coord.energy_summary(),
         "notifications": coord.recent_notifications[:10],
         "entities": {
             "climate": sorted(e for e in hass.states.async_entity_ids("climate")),

@@ -76,3 +76,18 @@ Room thermometer readings outside -10–45°, or jumping more than 3° from the 
 ignored and the last good value is kept. A jump that holds steady for 5 minutes is accepted (the
 sensor really moved). A thermometer that only sends glitches goes offline after the usual 15 minutes.
 Each zone sensor shows `ignored_readings` and `last_ignored`; the Now tab shows them too.
+
+## Costs and flow temperature (0.5.0)
+
+The **Costs & flow** tab and four sensors:
+
+| Entity | Shows |
+| --- | --- |
+| `sensor.smart_heating_boiler_hours_today` | Boiler on-time today |
+| `sensor.smart_heating_heating_cost_today` | Estimated gas cost today (hot-water base + burn rate × boiler hours, at the meter's unit rate and standing charge) |
+| `sensor.smart_heating_heating_cost_next_7_days` | Forecast from boiler hours per degree-day and the weather forecast; `days` attribute per day |
+| `sensor.smart_heating_suggested_flow_temperature` | Lowest flow that lets the primary room's radiators hold its goal (from learned cooling and warm-up) |
+
+Each day's boiler hours and mean outdoor temperature are stored; the smart meter's "last full day" gas
+is filed against its day when it arrives. Base and burn rate are learned after 4 days with differing
+heating; the forecast after 4 full days. The meter and weather entities are set in Settings.

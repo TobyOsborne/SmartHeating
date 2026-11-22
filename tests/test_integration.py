@@ -164,3 +164,27 @@ async def test_zero_glitch_does_not_trigger_frost_or_window(hass: HomeAssistant)
     assert zone.state not in ("frost", "window")
     assert zone.attributes["temperature"] == 13.0
     assert zone.attributes["ignored_readings"] == 1
+
+
+async def test_energy_sensors_track_boiler_time_and_meter(hass: HomeAssistant, freezer) -> None:
+    _world(hass)
+    hass.states.async_set("sensor.outdoor_temperature", "7")
+    hass.states.async_set("sensor.house_dcc_sourced_gas_last_full_day", "21.8")
+    hass.states.async_set("sensor.house_dcc_sourced_gas_cost_last_full_day", "1.68")
+    hass.states.async_set("sensor.house_dcc_sourced_gas_data_until", "2026-11-22T17:00:00+00:00")
+    hass.states.async_set("sensor.house_dcc_sourced_gas_unit_rate", "0.077")
+    hass.states.async_set("sensor.house_dcc_sourced_gas_standing_charge", "0.1683")
+    entry = await _setup(hass)
+    coord = entry.runtime_data
+    hass.states.async_set("switch.boiler", "on")
+    for _ in range(30):
+        freezer.tick(timedelta(minutes=1))
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done()
+    hours = float(hass.states.get("sensor.smart_heating_boiler_hours_today").state)
+    assert 0.45 < hours < 0.55
+    cost = float(hass.states.get("sensor.smart_heating_heating_cost_today").state)
+    assert cost == round((3.0 + 7.0 * hours) * 0.077 + 0.1683, 2) or abs(cost - ((3 + 7 * hours) * 0.077 + 0.1683)) < 0.02
+    assert coord.energy.days["2026-11-21"].gas_kwh == 21.8
+    assert hass.states.get("sensor.smart_heating_heating_cost_next_7_days").attributes["status"] == "learning"
+    assert hass.states.get("sensor.smart_heating_suggested_flow_temperature").attributes["status"] == "learning"
