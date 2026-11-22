@@ -37,6 +37,7 @@ from .const import (
     STARTUP_GRACE_SECONDS,
     VERIFY_AFTER_SECONDS,
 )
+from .sensors import ReadingFilter
 from .controller import WindowDetector, radiator_output_w, tick
 from .learning import ZoneLearning, estimate
 from .model import Config, Decision, Inputs, Mode, Notification, Override, Reading, State
@@ -93,6 +94,7 @@ class SmartHeatingCoordinator:
         self.sim_boiler_changed = 0.0
 
         self.windows: dict[str, WindowDetector] = {}
+        self.filters: dict[str, ReadingFilter] = {}
         self.window_ignored: dict[str, float] = {}
 
         self.learning: dict[str, ZoneLearning] = learning or {}
@@ -181,10 +183,9 @@ class SmartHeatingCoordinator:
         # Feed window detectors straight away
         for zone in self.config.zones.values():
             if zone.thermometer == entity_id and zone.name in self.windows and new is not None:
-                try:
-                    self.windows[zone.name].update(time.time(), float(new.state))
-                except (TypeError, ValueError):
-                    pass
+                reading = self._reading(entity_id)  # filtered: a glitch must not look like an open window
+                if reading.temp is not None:
+                    self.windows[zone.name].update(time.time(), reading.temp)
         # Batch bursts of changes into one tick a few seconds later
         if self._soon_unsub is None:
             self._soon_unsub = async_call_later(self.hass, 3, self._handle_soon)
@@ -216,9 +217,23 @@ class SmartHeatingCoordinator:
         try:
             temp = float(st.state)
         except (TypeError, ValueError):
-            return Reading(None, None)
-        reported = getattr(st, "last_reported", None) or st.last_updated
-        return Reading(temp, reported.timestamp())
+            temp = None
+        reported = (getattr(st, "last_reported", None) or st.last_updated).timestamp()
+        if entity_id not in self._thermometers():
+            return Reading(temp, reported) if temp is not None else Reading(None, None)
+        filt = self.filters.setdefault(entity_id, ReadingFilter())
+        if temp is None:
+            # unavailable/unknown: keep the last good value; staleness decides when it's offline
+            return Reading(*filt.good) if filt.good else Reading(None, None)
+        before = filt.rejected
+        good = filt.feed(temp, reported)
+        if filt.rejected != before:
+            _LOGGER.info("Ignoring implausible reading %s from %s (using %s)", temp, entity_id,
+                         good[0] if good else "nothing yet")
+        return Reading(*good) if good else Reading(None, None)
+
+    def _thermometers(self) -> set[str]:
+        return {z.thermometer for z in self.config.zones.values()}
 
     def _flow_temp(self) -> float:
         st = self.hass.states.get(self.flow_source)

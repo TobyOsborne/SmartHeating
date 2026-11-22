@@ -69,3 +69,10 @@ Edits are held until you press **Save**; invalid configurations are rejected and
 Each zone can have a **minimum** (Zones tab). It applies in every profile: whenever the boiler is
 running, rooms below their minimum open first, coldest first, and stop once they reach it (with the
 zone's hysteresis). A minimum never starts the boiler on its own; frost protection does that.
+
+## Thermometer glitch filter (0.4.1)
+
+Room thermometer readings outside -10–45°, or jumping more than 3° from the last good reading, are
+ignored and the last good value is kept. A jump that holds steady for 5 minutes is accepted (the
+sensor really moved). A thermometer that only sends glitches goes offline after the usual 15 minutes.
+Each zone sensor shows `ignored_readings` and `last_ignored`; the Now tab shows them too.

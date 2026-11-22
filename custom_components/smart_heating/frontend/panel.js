@@ -288,7 +288,7 @@ class SmartHeatingPanel extends HTMLElement {
       const openN = zr.filter((r) => D.radiators[r] && D.radiators[r].open).length;
       return `<div class="row zone">
         <div class="grow"><div class="title">${esc(z)} ${tt.primary ? `<span class="tag">primary</span>` : ""}${tt.buffer ? `<span class="tag">buffer</span>` : ""}${info.boost ? `<span class="tag hot">boost</span>` : ""}</div>
-          <div class="sub">${zr.length ? `${openN}/${zr.length} radiators open` : "no radiators"}${zmin != null ? ` · min ${zmin}°` : ""}</div></div>
+          <div class="sub">${zr.length ? `${openN}/${zr.length} radiators open` : "no radiators"}${zmin != null ? ` · min ${zmin}°` : ""}${info.ignored ? ` · ${info.ignored} odd reading${info.ignored > 1 ? "s" : ""} ignored (last ${info.last_ignored}°)` : ""}</div></div>
         <div class="temp">${num(info.temperature)}°<span class="sub"> / ${tt.target != null ? num(tt.target) + "°" : "–"}</span></div>
         <span class="chip ${esc(info.state)}">${esc(STATE_LABEL[info.state] || info.state || "–")}</span>
         ${info.boost ? `<button class="small ghost" data-act="boost-cancel" data-zone="${esc(z)}">End boost</button>`

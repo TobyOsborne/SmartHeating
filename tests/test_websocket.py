@@ -26,7 +26,7 @@ async def test_state_has_everything_the_panel_needs(hass: HomeAssistant, hass_ws
     r = msg["result"]
     assert r["runtime"]["profile"] == "Office" and r["runtime"]["dry_run"] is True
     assert r["decision"]["boiler_on"] is True
-    assert r["zones"]["Office"] == {"temperature": 17.0, "state": "heating", "boost": False}
+    assert r["zones"]["Office"] == {"temperature": 17.0, "state": "heating", "boost": False, "ignored": 0, "last_ignored": None}
     assert r["radiators"]["Office"]["open"] is True and r["radiators"]["Office"]["kw"] > 0.5
     assert {p["name"] for p in r["config"]["profiles"]} >= {"Office", "Living Room", "Whole House"}
     lr = r["learning"]["Living Room"]

@@ -149,3 +149,18 @@ async def test_no_offline_alert_while_sensors_restore_after_restart(hass: HomeAs
     async_fire_time_changed(hass)
     await hass.async_block_till_done()
     assert [n["kind"] for n in coord.recent_notifications] == ["sensor_offline"]
+
+
+async def test_zero_glitch_does_not_trigger_frost_or_window(hass: HomeAssistant) -> None:
+    _world(hass, office=19.0)  # Office profile satisfied: boiler off
+    entry = await _setup(hass)
+    bedroom = seed_config().zones["Main Bedroom"].thermometer
+    hass.states.async_set(bedroom, "0", {"unit_of_measurement": "°C"})
+    await hass.async_block_till_done()
+    await entry.runtime_data.async_tick()
+    await hass.async_block_till_done()
+    assert hass.states.get("binary_sensor.smart_heating_boiler").state == "off"
+    zone = hass.states.get("sensor.smart_heating_main_bedroom")
+    assert zone.state not in ("frost", "window")
+    assert zone.attributes["temperature"] == 13.0
+    assert zone.attributes["ignored_readings"] == 1

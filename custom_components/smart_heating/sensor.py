@@ -118,4 +118,7 @@ class ZoneSensor(SmartHeatingEntity, SensorEntity):
                     if e.zone == self.zone:
                         target, position = e.target, i + 1
         return {"temperature": reading.temp, "target": target, "list_position": position,
-                "radiators": zone.radiators, "thermometer": zone.thermometer}
+                "radiators": zone.radiators, "thermometer": zone.thermometer,
+                "minimum": zone.minimum,
+                "ignored_readings": (f.rejected if (f := c.filters.get(zone.thermometer)) else 0),
+                "last_ignored": f.last_rejected if f else None}

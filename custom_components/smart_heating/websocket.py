@@ -42,8 +42,10 @@ def build_state(hass: HomeAssistant, coord) -> dict[str, Any]:
     zones = {}
     for name, zone in cfg.zones.items():
         r = coord._reading(zone.thermometer)
+        f = coord.filters.get(zone.thermometer)
         zones[name] = {"temperature": r.temp, "state": d.zone_states.get(name, "idle") if d else None,
-                       "boost": any(o.zone == name for o in coord.runtime.overrides)}
+                       "boost": any(o.zone == name for o in coord.runtime.overrides),
+                       "ignored": f.rejected if f else 0, "last_ignored": f.last_rejected if f else None}
     radiators = {}
     for name, rad in cfg.radiators.items():
         room = next((zones[z]["temperature"] for z, zone in cfg.zones.items()
