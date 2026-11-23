@@ -8,6 +8,7 @@ from custom_components.smart_heating.energy import (
 
 
 def _day(ledger, date, hours, outdoor, gas=None):
+    ledger.add_tracked(date, 24 * 3600)
     ledger.add_runtime(date, hours * 3600)
     for _ in range(1440):
         ledger.add_outdoor(date, outdoor)
@@ -79,3 +80,13 @@ def test_flow_advice_finds_lowest_flow_that_holds_the_room():
     cold = suggest_flow(half_life_h=36.8, free_heat=1.1, warmup_per_kw=0.05, warmup_confidence=80,
                         goal=18, outdoor=-3, radiators=LIVING_ROOM, drop=10, current_flow=60)
     assert cold["suggested"] > 60
+
+
+def test_part_recorded_day_is_not_taken_as_a_hot_water_day():
+    # Recording started mid-evening, after the old system had done that day's heating
+    led = EnergyLedger()
+    led.add_tracked("2026-11-22", 3 * 3600)
+    led.add_outdoor("2026-11-22", 7)
+    led.set_gas("2026-11-22", 21.8, 1.68)
+    base, burn, n, learned = led.gas_model()
+    assert n == 0 and base == 3.0 and not learned

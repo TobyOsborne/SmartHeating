@@ -32,6 +32,7 @@ HDD_BASE = 15.5
 DEFAULT_BURN_KW = 7.0  # gas kW while firing, until learned (i30 at low fire, ~90 % efficient)
 DEFAULT_BASE_KWH = 3.0  # hot water etc. per day, until learned
 MIN_DAYS = 4
+FULL_DAY_S = 20 * 3600  # a day only teaches the models if it was recorded for at least this long
 KEEP_DAYS = 60
 FLOW_MARGIN = 1.3  # radiators must give 30 % more than the loss, so the room can warm up
 FLOW_MIN, FLOW_MAX = 40, 75
@@ -44,6 +45,11 @@ class DayRecord:
     out_n: int = 0
     gas_kwh: float | None = None  # from the smart meter, when it arrives
     cost: float | None = None
+    tracked_s: float = 0.0  # how much of the day was actually recorded
+
+    @property
+    def full(self) -> bool:
+        return self.tracked_s >= FULL_DAY_S
 
     @property
     def out_mean(self) -> float | None:
@@ -72,6 +78,9 @@ class EnergyLedger:
     def add_runtime(self, date: str, seconds: float) -> None:
         self.day(date).hours += seconds / 3600
 
+    def add_tracked(self, date: str, seconds: float) -> None:
+        self.day(date).tracked_s += seconds
+
     def add_outdoor(self, date: str, temp: float) -> None:
         rec = self.day(date)
         rec.out_sum += temp
@@ -85,8 +94,9 @@ class EnergyLedger:
 
     def gas_model(self) -> tuple[float, float, int, bool]:
         """(base kWh/day, burn kW, days used, learned?) from days with both meter and runtime."""
-        pts = [(r.hours, r.gas_kwh) for r in self.days.values()
-               if r.gas_kwh is not None and r.out_n > 0]
+        # Only days recorded from start to finish: a part-recorded day under-counts boiler
+        # hours, which would push its gas into the hot-water base.
+        pts = [(r.hours, r.gas_kwh) for r in self.days.values() if r.gas_kwh is not None and r.full]
         n = len(pts)
         if n >= MIN_DAYS:
             mx = sum(p[0] for p in pts) / n
@@ -105,7 +115,7 @@ class EnergyLedger:
 
     def hours_model(self) -> tuple[float | None, int]:
         """Boiler hours per heating degree-day, from complete days that needed heat."""
-        pts = [(r.hdd, r.hours) for r in self.days.values() if r.hdd and r.out_n >= 600]
+        pts = [(r.hdd, r.hours) for r in self.days.values() if r.hdd and r.full]
         n = len(pts)
         if n < MIN_DAYS:
             return None, n

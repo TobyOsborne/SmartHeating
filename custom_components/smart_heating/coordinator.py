@@ -336,8 +336,11 @@ class SmartHeatingCoordinator:
         date = time.strftime("%Y-%m-%d", time.localtime(now))
         real_on = (self.hass.states.get(self.boiler) or None)
         boiler_on = real_on is not None and real_on.state == STATE_ON
-        if self._energy_t is not None and boiler_on:
-            self.energy.add_runtime(date, min(now - self._energy_t, 180))
+        if self._energy_t is not None:
+            step = min(now - self._energy_t, 180)  # a gap (restart, outage) isn't counted as recorded
+            self.energy.add_tracked(date, step)
+            if boiler_on:
+                self.energy.add_runtime(date, step)
         self._energy_t = now
         outdoor = self._reading(s.outdoor_sensor).temp
         if outdoor is not None:
