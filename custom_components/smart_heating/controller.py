@@ -88,11 +88,22 @@ def apply_overrides(profile: Profile, overrides: list[Override], now: float) -> 
     return prof
 
 
-def _zone_temp(inputs: Inputs, zone: str, stale_s: float) -> float | None:
+def _zone_temp(inputs: Inputs, zone: str, settings, radiators: list[str] | None = None) -> float | None:
+    """A zone's reading, or None when its thermometer counts as offline.
+
+    Thermometers report on change, so a quiet room can go hours without a report. A
+    thermometer only counts as offline when it has been silent for ``sensor_quiet_s``, or
+    when its room is being heated and it has said nothing for ``sensor_stale_s`` since the
+    heating started (a heated room changes, so silence then means trouble).
+    """
     r = inputs.readings.get(zone)
     if r is None or r.temp is None or r.updated is None:
         return None
-    if inputs.now - r.updated > stale_s:
+    silent = inputs.now - r.updated
+    if silent > settings.sensor_quiet_s:
+        return None
+    heating = inputs.boiler_on and any(inputs.radiator_open.get(x, False) for x in (radiators or []))
+    if heating and inputs.now - max(r.updated, inputs.boiler_changed) > settings.sensor_stale_s:
         return None
     return r.temp
 
@@ -101,7 +112,7 @@ def _room_temps(config: Config, inputs: Inputs) -> dict[str, float]:
     """Temperature each radiator works against: the first zone it belongs to."""
     out: dict[str, float] = {}
     for zone in config.zones.values():
-        t = _zone_temp(inputs, zone.name, config.settings.sensor_stale_s)
+        t = _zone_temp(inputs, zone.name, config.settings, zone.radiators)
         for rad in zone.radiators:
             if rad not in out and t is not None:
                 out[rad] = t
@@ -132,7 +143,7 @@ def tick(config: Config, inputs: Inputs, state: State | None = None) -> tuple[De
     notes: list[Notification] = []
     reasons: dict[str, str] = {}
     zone_states: dict[str, str] = {}
-    temps = {z: _zone_temp(inputs, z, s.sensor_stale_s) for z in config.zones}
+    temps = {z: _zone_temp(inputs, z, s, config.zones[z].radiators) for z in config.zones}
     room_temps = _room_temps(config, inputs)
     needed = s.boiler_min_w + s.margin_w
 

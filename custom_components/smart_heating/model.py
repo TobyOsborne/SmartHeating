@@ -82,13 +82,15 @@ class Settings:
     frost_temp: float = 7.0
     frost_release: float = 1.0  # frost heating stops at frost_temp + this
     goal_band: float = 0.3  # boiler on below goal - band, off at goal + band
-    sensor_stale_s: float = 900
+    sensor_stale_s: float = 2700  # while its radiators are heating: no report this long since heating began = offline
+    sensor_quiet_s: float = 10800  # otherwise: thermometers only report on change, so allow long quiet spells
     safety_runtime_s: float = 3 * 3600
     all_satisfied_notify_s: float = 900
     open_temp: float = 30.0
     closed_temp: float = 5.0
     default_room_temp: float = 18.0
     outdoor_sensor: str = "sensor.outdoor_temperature"
+    correct_trv_drift: bool = True  # put back TRVs changed by hand, by their own schedule or after a power cut
     # Costs: smart meter gas (DCC / Glow) sensors and a weather entity for the forecast
     gas_day_sensor: str = "sensor.house_dcc_sourced_gas_last_full_day"
     gas_cost_day_sensor: str = "sensor.house_dcc_sourced_gas_cost_last_full_day"

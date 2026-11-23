@@ -188,3 +188,53 @@ async def test_energy_sensors_track_boiler_time_and_meter(hass: HomeAssistant, f
     assert coord.energy.days["2026-11-21"].gas_kwh == 21.8
     assert hass.states.get("sensor.smart_heating_heating_cost_next_7_days").attributes["status"] == "learning"
     assert hass.states.get("sensor.smart_heating_suggested_flow_temperature").attributes["status"] == "learning"
+
+
+async def test_trv_changed_by_hand_is_put_back(hass: HomeAssistant, freezer) -> None:
+    _world(hass, office=19.0)  # Office warm: boiler off, every valve should be closed (5°)
+    climate_calls = async_mock_service(hass, "climate", "set_temperature")
+    entry = await _setup(hass)
+    coord = entry.runtime_data
+    async_mock_service(hass, "switch", "turn_on")
+    async_mock_service(hass, "switch", "turn_off")
+    await coord.async_set_dry_run(False)
+    freezer.tick(timedelta(minutes=5))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    climate_calls.clear()
+
+    # Someone turns the Main Bedroom TRV up to 25°
+    hass.states.async_set("climate.trv_bedroom", "heat", {"temperature": 25})
+    freezer.tick(timedelta(minutes=1))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    bedroom = [c.data["temperature"] for c in climate_calls if c.data["entity_id"] == "climate.trv_bedroom"]
+    assert bedroom == [5]
+    assert [n["kind"] for n in coord.recent_notifications if n["kind"] == "trv_drift"] == ["trv_drift"]
+
+    # Still wrong next minute: it's being verified, not spammed
+    climate_calls.clear()
+    freezer.tick(timedelta(minutes=1))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert [c for c in climate_calls if c.data["entity_id"] == "climate.trv_bedroom"] == []
+
+
+async def test_trv_drift_correction_can_be_turned_off(hass: HomeAssistant, freezer) -> None:
+    _world(hass, office=19.0)
+    climate_calls = async_mock_service(hass, "climate", "set_temperature")
+    entry = await _setup(hass)
+    coord = entry.runtime_data
+    async_mock_service(hass, "switch", "turn_on")
+    async_mock_service(hass, "switch", "turn_off")
+    coord.config.settings.correct_trv_drift = False
+    await coord.async_set_dry_run(False)
+    freezer.tick(timedelta(minutes=5))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    climate_calls.clear()
+    hass.states.async_set("climate.trv_bedroom", "heat", {"temperature": 25})
+    freezer.tick(timedelta(minutes=2))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert [c for c in climate_calls if c.data["entity_id"] == "climate.trv_bedroom"] == []

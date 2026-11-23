@@ -25,7 +25,8 @@ const SETTINGS = [
   ]],
   ["Comfort & safety", [
     ["goal_band", "Goal band (±)", "°C", 1], ["frost_temp", "Frost protection below", "°C", 1],
-    ["frost_release", "Frost release above", "°C", 1], ["sensor_stale_s", "Sensor offline after", "min", 60],
+    ["frost_release", "Frost release above", "°C", 1], ["sensor_stale_s", "Offline if silent while heating", "min", 60],
+    ["sensor_quiet_s", "Offline if silent otherwise", "h", 3600],
     ["all_satisfied_notify_s", "All-warm notice after", "min", 60],
   ]],
 ];
@@ -481,6 +482,9 @@ class SmartHeatingPanel extends HTMLElement {
     return `${SETTINGS.map(([group, rows]) => `<section class="card"><h2>${group}</h2><div class="grid">
         ${rows.map(([k, label, unit, scale]) => `<label>${label} (${unit}) <input id="s-${k}" type="number" step="any" data-scale="${scale}" data-f="settings.${k}" value="${s[k] / scale}"></label>`).join("")}
       </div></section>`).join("")}
+      <section class="card"><h2>Radiator valves</h2>
+        <label class="inline"><input type="checkbox" data-f="settings.correct_trv_drift" ${s.correct_trv_drift !== false ? "checked" : ""}> Put back valves changed by hand, by their own schedule or after a power cut</label>
+        <p class="hint">Checked every minute. You get one notification per valve each time it happens. To warm a room for a while, use Boost on the Now tab instead.</p></section>
       <section class="card"><h2>Sensors</h2><div class="grid">
         <label>Outdoor temperature <input id="s-out" list="temps" data-f="settings.outdoor_sensor" value="${esc(s.outdoor_sensor)}"></label>
         <label>Weather (for the cost forecast) <input id="s-wx" data-f="settings.weather_entity" value="${esc(s.weather_entity)}"></label>

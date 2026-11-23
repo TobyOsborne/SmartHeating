@@ -91,6 +91,7 @@ class SmartHeatingCoordinator:
         self.radiator_changed: dict[str, float] = {}
         self.pending: dict[str, Pending] = {}
         self.faulty: set[str] = set()
+        self.drift_notified: set[str] = set()
 
         # Simulated boiler, used in dry run
         self.sim_boiler_on = False
@@ -303,6 +304,7 @@ class SmartHeatingCoordinator:
         if self.runtime.mode is not Mode.MANUAL:
             await self._apply(decision, now)
         await self._verify(now)
+        await self._check_drift(now)
 
         for zone, st in decision.zone_states.items():
             if st == "window" and zone not in previous_windows:
@@ -531,6 +533,42 @@ class SmartHeatingCoordinator:
             p.due = now + VERIFY_AFTER_SECONDS
             if not self.runtime.dry_run:
                 await self._send_trv(rad.trv, p.target)
+
+    async def _check_drift(self, now: float) -> None:
+        """Put back any TRV whose setpoint or mode no longer matches what we last told it."""
+        s = self.config.settings
+        if not s.correct_trv_drift or self.runtime.dry_run or self.runtime.mode is Mode.MANUAL:
+            return
+        for name, rad in self.config.radiators.items():
+            if not rad.enabled or name in self.pending or name in self.faulty:
+                continue
+            if now - self.radiator_changed.get(name, 0.0) < VERIFY_AFTER_SECONDS:
+                continue  # just told it something; _verify watches that
+            st = self.hass.states.get(rad.trv)
+            if st is None or st.state in ("unavailable", "unknown"):
+                continue
+            expected = s.open_temp if self.radiator_open.get(name, False) else s.closed_temp
+            current = st.attributes.get("temperature")
+            try:
+                current = float(current) if current is not None else None
+            except (TypeError, ValueError):
+                current = None
+            if current is not None and abs(current - expected) < 0.5 and st.state == "heat":
+                self.drift_notified.discard(name)
+                continue
+            was = f"{current:g}°" if current is not None else "unknown"
+            if st.state != "heat":
+                was += f" ({st.state} mode)"
+            _LOGGER.info("TRV %s drifted to %s; setting back to %s°", rad.trv, was, expected)
+            self.pending[name] = Pending(target=expected, due=now + VERIFY_AFTER_SECONDS)
+            await self._send_trv(rad.trv, expected)
+            if name not in self.drift_notified:
+                self.drift_notified.add(name)
+                await self._notify(Notification(
+                    "trv_drift",
+                    f"{name} radiator valve had been changed to {was}; set back to "
+                    f"{'open' if expected == s.open_temp else 'closed'}. Use Boost in the Heating panel "
+                    f"to warm a room instead."))
 
     async def _notify(self, note: Notification) -> None:
         entry = {"time": time.time(), "kind": note.kind, "message": note.message,

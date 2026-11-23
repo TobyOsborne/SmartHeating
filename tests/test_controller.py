@@ -187,12 +187,34 @@ def test_faulty_trv_left_out_of_plan_and_capacity():
 def test_primary_thermometer_offline_stops_boiler_and_notifies_once():
     cfg = seed_config()
     inp = make_inputs(cfg, COLD)
-    inp.readings["Office"] = Reading(17.0, NOW - 3600)  # stale
+    inp.readings["Office"] = Reading(17.0, NOW - 4 * 3600)  # silent for longer than the quiet limit
     d, state = tick(cfg, inp)
     assert not d.boiler_on
     assert [n.kind for n in d.notifications] == ["sensor_offline"]
     d, state = tick(cfg, inp, state)
     assert d.notifications == []
+
+
+def test_quiet_thermometer_is_fine_while_its_room_is_not_heating():
+    cfg = seed_config()
+    inp = make_inputs(cfg, COLD | {"Office": 19.0})  # boiler off, Office warm
+    inp.readings["Office"] = Reading(19.0, NOW - 2 * 3600)  # unchanged for 2 h: no reports
+    d, _ = tick(cfg, inp)
+    assert d.zone_states["Office"] != "offline" and d.notifications == []
+
+
+def test_silent_thermometer_while_heating_counts_from_when_heating_started():
+    cfg = seed_config()
+    # Boiler came on 20 min ago; the sensor last spoke 2 h ago. Not offline yet.
+    inp = make_inputs(cfg, COLD, boiler_on=True, boiler_changed=NOW - 20 * 60, open_=("Office",))
+    inp.readings["Office"] = Reading(17.0, NOW - 2 * 3600)
+    d, _ = tick(cfg, inp)
+    assert d.boiler_on and d.zone_states["Office"] == "heating"
+    # 50 min of heating with not a single report: that's a dead sensor.
+    inp = make_inputs(cfg, COLD, boiler_on=True, boiler_changed=NOW - 50 * 60, open_=("Office",))
+    inp.readings["Office"] = Reading(17.0, NOW - 2 * 3600)
+    d, _ = tick(cfg, inp)
+    assert not d.boiler_on and d.zone_states["Office"] == "offline"
 
 
 # ------------------------------------------------------------ frost and modes
