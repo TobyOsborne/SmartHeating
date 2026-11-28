@@ -238,3 +238,104 @@ async def test_trv_drift_correction_can_be_turned_off(hass: HomeAssistant, freez
     async_fire_time_changed(hass)
     await hass.async_block_till_done()
     assert [c for c in climate_calls if c.data["entity_id"] == "climate.trv_bedroom"] == []
+
+
+async def test_boost_in_manual_mode_switches_the_boiler(hass: HomeAssistant, freezer) -> None:
+    _world(hass, office=17.0)
+    await _setup(hass)
+    coord = hass.config_entries.async_entries(DOMAIN)[0].runtime_data
+    await hass.services.async_call(DOMAIN, "set_mode", {"mode": "manual"}, blocking=True)
+    await coord.async_set_dry_run(False)
+    freezer.tick(timedelta(minutes=11))  # past the boiler's minimum off time
+    switch_on = async_mock_service(hass, "switch", "turn_on")
+    climate_calls = async_mock_service(hass, "climate", "set_temperature")
+
+    await hass.services.async_call(DOMAIN, "recalculate", {}, blocking=True)
+    assert switch_on == [] and climate_calls == []  # Manual: nothing touched without a boost
+
+    await hass.services.async_call(DOMAIN, "boost", {"zone": "Office", "target": 20, "minutes": 60},
+                                   blocking=True)
+    assert [c.data["entity_id"] for c in switch_on] == ["switch.boiler"]
+    assert {c.data["entity_id"]: c.data["temperature"] for c in climate_calls} == {"climate.trv_office": 30.0}
+
+
+async def test_boiler_notifications_can_be_turned_on(hass: HomeAssistant, freezer) -> None:
+    _world(hass, office=17.0)
+    await _setup(hass)
+    coord = hass.config_entries.async_entries(DOMAIN)[0].runtime_data
+    notes = async_mock_service(hass, "notify", "mobile_app_test")
+    async_mock_service(hass, "switch", "turn_on")
+    async_mock_service(hass, "switch", "turn_off")
+    async_mock_service(hass, "climate", "set_temperature")
+    await coord.async_set_dry_run(False)
+    freezer.tick(timedelta(minutes=11))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert not [n for n in notes if n.data["message"].startswith("Boiler")]  # off by default
+
+    coord.config.settings.notify_boiler = True
+    hass.states.async_set("sensor.thermostat_office_temperature", "19.0")  # boiler off
+    freezer.tick(timedelta(minutes=11))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    hass.states.async_set("sensor.thermostat_office_temperature", "16.0")  # and on again
+    freezer.tick(timedelta(minutes=11))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    msgs = [n.data["message"] for n in notes if n.data["message"].startswith("Boiler")]
+    assert len(msgs) == 2, msgs
+    assert msgs[0].startswith("Boiler off: Office 19.0° at 18° goal. Ran ") and msgs[0].endswith("today.")
+    assert msgs[1].startswith("Boiler on: Office 16.0° below 18° goal.") and "so far today" in msgs[1]
+    assert all(n.data["data"]["tag"] == "smart_heating_boiler" for n in notes if n.data["message"].startswith("Boiler"))
+
+
+async def test_cooling_is_learned_with_primary_valves_open_once_boiler_has_rested(hass: HomeAssistant, freezer) -> None:
+    _world(hass, office=19.0)
+    hass.states.async_set("climate.trv_office", "heat", {"temperature": 30})  # primary valve open between runs
+    hass.states.async_set("sensor.outdoor_temperature", "5")
+    await _setup(hass)
+    coord = hass.config_entries.async_entries(DOMAIN)[0].runtime_data
+    office = coord.learning["Office"]
+    assert all(not s.quiet for s in office.hours.values())  # boiler only just went off: not quiet yet
+    freezer.tick(timedelta(minutes=16))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    hour = max(office.hours)
+    office.hours[hour].quiet = True  # judge only the ticks from here on
+    for _ in range(3):
+        freezer.tick(timedelta(minutes=1))
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done()
+    assert office.hours[max(office.hours)].quiet
+
+
+async def test_daily_summary(hass: HomeAssistant, freezer) -> None:
+    freezer.move_to("2026-11-28 20:58:00")
+    _world(hass, office=17.0)
+    await _setup(hass)
+    coord = hass.config_entries.async_entries(DOMAIN)[0].runtime_data
+    notes = async_mock_service(hass, "notify", "mobile_app_test")
+    for name in ("switch", "climate"):
+        for svc in (("turn_on", "turn_off") if name == "switch" else ("set_temperature",)):
+            async_mock_service(hass, name, svc)
+    await coord.async_set_dry_run(False)
+    coord.config.settings.daily_summary_time = "21:00"
+    hass.states.async_set("switch.boiler", "on")  # a run starts
+    await hass.async_block_till_done()
+    freezer.tick(timedelta(minutes=3))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert not [n for n in notes if "today over" in n.data["message"]]  # off by default
+
+    coord.config.settings.notify_daily_summary = True
+    freezer.tick(timedelta(minutes=1))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    sums = [n for n in notes if n.data["data"]["tag"] == "smart_heating_summary"]
+    assert len(sums) == 1, [n.data for n in notes]
+    msg = sums[0].data["message"]
+    assert msg.startswith("Boiler on ") and "today over 1 run" in msg, msg
+    freezer.tick(timedelta(minutes=1))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert len([n for n in notes if n.data["data"]["tag"] == "smart_heating_summary"]) == 1  # once a day

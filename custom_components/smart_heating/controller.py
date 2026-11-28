@@ -10,7 +10,7 @@ Rules (see the proposal, "Control algorithm"):
   as the profile's spare-heat mode allows.
 - Radiators are open (30°) or closed (5°); a radiator counts once toward
   capacity however many zones want it.
-- Any zone under the frost temperature is heated in every mode except Off.
+- Any zone under the frost temperature is heated in every mode, Off included.
 """
 
 from __future__ import annotations
@@ -76,7 +76,8 @@ def apply_overrides(profile: Profile, overrides: list[Override], now: float) -> 
             continue
         idx = next((i for i, e in enumerate(prof.priority) if e.zone == o.zone), None)
         if idx is None:
-            entry = PriorityEntry(zone=o.zone, target=o.target if o.target is not None else 0.0, buffer=True)
+            # Not in this profile: with no boost target, heat it to the profile's goal
+            entry = PriorityEntry(zone=o.zone, target=o.target if o.target is not None else prof.goal, buffer=True)
         else:
             entry = prof.priority.pop(idx)
             # A boosted zone always gets heat, whatever the spare-heat mode.
@@ -147,44 +148,39 @@ def tick(config: Config, inputs: Inputs, state: State | None = None) -> tuple[De
     room_temps = _room_temps(config, inputs)
     needed = s.boiler_min_w + s.margin_w
 
-    # --- frost: any zone below frost temperature, every mode except Off
+    # --- frost: any zone below frost temperature, in every mode (always on in the background)
     frost_open: set[str] = set()
-    if inputs.mode is not Mode.OFF:
-        for z, t in temps.items():
-            if t is None:
-                continue
-            if t < s.frost_temp:
-                state.frost_active.add(z)
-            elif t >= s.frost_temp + s.frost_release:
-                state.frost_active.discard(z)
+    for z, t in temps.items():
+        if t is None:
+            continue
+        if t < s.frost_temp:
+            state.frost_active.add(z)
+        elif t >= s.frost_temp + s.frost_release:
+            state.frost_active.discard(z)
+    if state.frost_active:
+        # Open every radiator, not just the cold rooms': the boiler gets a big load and runs one
+        # long burn instead of short-cycling for one room after another.
+        cold = ", ".join(sorted(state.frost_active))
+        for r in _usable(config, inputs, list(config.radiators)):
+            frost_open.add(r)
+            reasons[r] = f"frost protection: {cold} below {s.frost_temp:g}°"
         for z in state.frost_active:
-            for r in _usable(config, inputs, config.zones[z].radiators):
-                frost_open.add(r)
-                reasons[r] = f"frost protection: {z} below {s.frost_temp:g}°"
             zone_states[z] = "frost"
-    else:
-        state.frost_active.clear()
 
-    # --- Off: everything closed, boiler off, no hold times
+    # --- Off: everything closed and boiler off (straight away), except frost protection
     if inputs.mode is Mode.OFF:
-        return _finish(config, inputs, state, False, set(), reasons, zone_states, room_temps, needed,
-                       "Heating is off", notes, apply_hold=False)
-
-    # --- Manual: change nothing
-    if inputs.mode is Mode.MANUAL:
-        current = {r for r, o in inputs.radiator_open.items() if o}
-        for r in config.radiators:
-            reasons[r] = "manual mode"
-        return _finish(config, inputs, state, inputs.boiler_on, current, reasons, zone_states, room_temps, needed,
-                       "Manual mode", notes, apply_hold=False, touch_nothing=True)
-
-    # --- Frost mode: only frost heating
-    if inputs.mode is Mode.FROST:
-        want_on = bool(frost_open)
-        want_on = _respect_boiler_times(config, inputs, want_on)
-        reason = "Frost protection running" if frost_open else "Frost mode: all zones above frost temperature"
+        want_on = _respect_boiler_times(config, inputs, bool(frost_open), safety=True)
+        reason = "Heating is off"
+        if frost_open:
+            reason += "; frost protection running in " + ", ".join(sorted(state.frost_active))
         return _finish(config, inputs, state, want_on, frost_open, reasons, zone_states, room_temps, needed,
-                       reason, notes)
+                       reason, notes, apply_hold=False)
+
+    # --- Manual: change nothing, except to run a boost or frost protection
+    if inputs.mode is Mode.MANUAL:
+        return _manual(config, inputs, state, temps, frost_open, reasons, zone_states, room_temps, needed, notes)
+    state.manual_opened.clear()
+    state.manual_boiler = False
 
     # --- Auto
     profile = config.profiles[inputs.profile]
@@ -328,6 +324,82 @@ def tick(config: Config, inputs: Inputs, state: State | None = None) -> tuple[De
         state.safety_warned = False
 
     return _finish(config, inputs, state, want_on, open_set, reasons, zone_states, room_temps, needed, reason, notes)
+
+
+def _boost_target(config: Config, profile: Profile, o: Override) -> float:
+    """What a boosted zone heats to: the boost's own target, else the profile's, else its goal."""
+    if o.target is not None:
+        return o.target
+    entry = next((e for e in profile.priority if e.zone == o.zone), None)
+    if entry is not None and entry.target:
+        return entry.target
+    return profile.goal
+
+
+def _manual(config, inputs, state, temps, frost_open, reasons, zone_states, room_temps, needed, notes):
+    """Manual mode: radiators and boiler are left as they are, except for boosts and frost.
+
+    A boosted zone below its target opens its radiators and runs the boiler (with the usual
+    minimum on/off times) until it reaches the target or the boost ends. Then the radiators
+    this opened are closed again, and the boiler is turned off only if a boost turned it on.
+    Frost protection works the same way.
+    """
+    s = config.settings
+    now = inputs.now
+    profile = config.profiles[inputs.profile]
+    boosts = [o for o in inputs.overrides
+              if (o.expires_at is None or o.expires_at > now) and o.profile in (None, inputs.profile)
+              and o.zone in config.zones]
+    current = {r for r, o in inputs.radiator_open.items() if o}
+    users = current - state.manual_opened  # opened by hand or before Manual: never touched
+    open_set = set(users) | frost_open
+    for r in config.radiators:
+        if r not in frost_open:
+            reasons[r] = "manual mode"
+
+    heating: list[str] = [f"frost protection in {z}" for z in sorted(state.frost_active)]
+    for o in boosts:
+        zone = config.zones[o.zone]
+        target = _boost_target(config, profile, o)
+        t = temps[zone.name]
+        if inputs.windows.get(zone.name, False):
+            zone_states[zone.name] = "window"
+            continue
+        if _satisfied(state, f"boost:{zone.name}", t, target, zone.hysteresis):
+            zone_states[zone.name] = "satisfied" if t is not None else "offline"
+            continue
+        zone_states[zone.name] = "heating"
+        heating.append(f"boosting {zone.name} {t:.1f}° → {target:g}°")
+        for r in _usable(config, inputs, zone.radiators):
+            open_set.add(r)
+            reasons[r] = f"boost: {zone.name} below {target:g}°"
+
+    if heating:
+        boiler = _respect_boiler_times(config, inputs, True)
+        if boiler and not inputs.boiler_on:
+            state.manual_boiler = True
+    elif state.manual_boiler:
+        boiler = _respect_boiler_times(config, inputs, False)
+    else:
+        boiler = inputs.boiler_on
+    if not boiler:
+        state.manual_boiler = False
+    if state.manual_boiler and boiler and not heating:
+        # Boiler held on for its minimum run: keep the boosted radiators open meanwhile
+        open_set |= current & state.manual_opened
+    state.manual_opened = open_set - users
+
+    if heating:
+        reason = "Manual mode; " + ", ".join(heating)
+        if not boiler:
+            left = max(0, s.min_off_s - (now - inputs.boiler_changed)) / 60
+            reason += f"; boiler resting for its minimum off time ({left:.0f} min left)"
+    elif boosts:
+        reason = "Manual mode; boosted rooms at target"
+    else:
+        reason = "Manual mode"
+    return _finish(config, inputs, state, boiler, open_set, reasons, zone_states, room_temps, needed,
+                   reason, notes, apply_hold=False)
 
 
 def _respect_boiler_times(config: Config, inputs: Inputs, want_on: bool, safety: bool = False) -> bool:

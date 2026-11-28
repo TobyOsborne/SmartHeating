@@ -32,7 +32,7 @@ from .seed import PI_COOLING, seed_config
 from .store import config_from_dict
 from . import panel, websocket
 
-VERSION = "0.5.3"
+VERSION = "0.6.0"
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -53,8 +53,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartHeatingConfigEntry)
         config = seed_config()
 
     raw = data.get("runtime", {})
+    mode = raw.get("mode", Mode.AUTO.value)
+    if mode == "frost":  # Frost was a mode before 0.6.0; frost protection now always runs
+        mode = Mode.OFF.value
     runtime = Runtime(
-        mode=Mode(raw.get("mode", Mode.AUTO.value)),
+        mode=Mode(mode),
         profile=raw.get("profile", next(iter(config.profiles))),
         dry_run=raw.get("dry_run", True),  # always start new installs in dry run
     )

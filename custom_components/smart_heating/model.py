@@ -13,8 +13,7 @@ from enum import Enum
 class Mode(str, Enum):
     AUTO = "auto"
     MANUAL = "manual"
-    OFF = "off"
-    FROST = "frost"
+    OFF = "off"  # frost protection still runs
 
 
 class SpareHeat(str, Enum):
@@ -91,6 +90,9 @@ class Settings:
     default_room_temp: float = 18.0
     outdoor_sensor: str = "sensor.outdoor_temperature"
     correct_trv_drift: bool = True  # put back TRVs changed by hand, by their own schedule or after a power cut
+    notify_boiler: bool = False  # notify each time the boiler turns on or off
+    notify_daily_summary: bool = False  # one notification a day: boiler time, runs, cost, tomorrow
+    daily_summary_time: str = "21:00"  # local time, HH:MM
     # Costs: smart meter gas (DCC / Glow) sensors and a weather entity for the forecast
     gas_day_sensor: str = "sensor.house_dcc_sourced_gas_last_full_day"
     gas_cost_day_sensor: str = "sensor.house_dcc_sourced_gas_cost_last_full_day"
@@ -143,6 +145,8 @@ class State:
     runtime_warned: bool = False
     safety_warned: bool = False
     offline_notified: bool = False
+    manual_opened: set[str] = field(default_factory=set)  # radiators a boost opened in Manual mode
+    manual_boiler: bool = False  # a boost in Manual mode turned the boiler on
 
 
 @dataclass

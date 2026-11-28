@@ -33,6 +33,7 @@ from .const import (
     ACTION_KEEP_GOING,
     ACTION_TURN_OFF,
     MAX_ATTEMPTS,
+    QUIET_AFTER_SECONDS,
     SIGNAL_UPDATE,
     TICK_SECONDS,
     STARTUP_GRACE_SECONDS,
@@ -50,6 +51,13 @@ _LOGGER = logging.getLogger(__name__)
 
 def _slug(text: str) -> str:
     return "".join(c if c.isalnum() else "_" for c in text.lower()).strip("_")
+
+
+def _duration(seconds: float) -> str:
+    minutes = int(round(seconds / 60))
+    if minutes < 60:
+        return f"{minutes} min"
+    return f"{minutes // 60} h {minutes % 60:02d} min"
 
 
 @dataclass
@@ -108,6 +116,10 @@ class SmartHeatingCoordinator:
         self._forecast_fetched = 0.0
         self.energy_cache: dict = {}
         self._last_hour: int | None = None
+        self._boiler_wanted: bool | None = None  # last decision, for on/off notifications
+        self._boiler_on_since: float | None = None
+        self._energy_boiler: bool | None = None  # real boiler state last tick, to count runs
+        self._summary_date: str | None = None  # day the daily summary was last sent
 
         self._unsubs: list = []
         self._soon_unsub = None
@@ -301,8 +313,8 @@ class SmartHeatingCoordinator:
         decision, self.state = tick(self.config, inputs, self.state)
         self.decision = decision
 
-        if self.runtime.mode is not Mode.MANUAL:
-            await self._apply(decision, now)
+        # In Manual mode the decision leaves everything as it is unless a boost is running
+        await self._apply(decision, now)
         await self._verify(now)
         await self._check_drift(now)
 
@@ -320,6 +332,8 @@ class SmartHeatingCoordinator:
 
         await self._learn(now)
         await self._track_energy(now)
+        await self._notify_boiler(decision, now)
+        await self._daily_summary(now)
         async_dispatcher_send(self.hass, SIGNAL_UPDATE)
 
     # ------------------------------------------------------------ energy
@@ -341,6 +355,9 @@ class SmartHeatingCoordinator:
             self.energy.add_tracked(date, step)
             if boiler_on:
                 self.energy.add_runtime(date, step)
+        if boiler_on and self._energy_boiler is False:
+            self.energy.add_run(date)
+        self._energy_boiler = boiler_on
         self._energy_t = now
         outdoor = self._reading(s.outdoor_sensor).temp
         if outdoor is not None:
@@ -439,6 +456,10 @@ class SmartHeatingCoordinator:
         outdoor = self._reading(s.outdoor_sensor).temp
         bst = self.hass.states.get(self.boiler)
         boiler_on = bst is not None and bst.state == STATE_ON
+        # Open valves give no heat once the boiler has been off a while (the primary room's stay
+        # open between runs), so cooling is learned from the boiler alone, after the radiators cool.
+        quiet = (bst is not None and not boiler_on
+                 and now - bst.last_changed.timestamp() >= QUIET_AFTER_SECONDS)
         flow = self._flow_temp()
         for zone in self.config.zones.values():
             zl = self.learning.setdefault(zone.name, ZoneLearning())
@@ -447,8 +468,9 @@ class SmartHeatingCoordinator:
             kw = sum(radiator_output_w(self.config.radiators[r].rated_w, flow, s.drop,
                                        temp if temp is not None else s.default_room_temp,
                                        self.config.radiators[r].exponent) for r in open_rads) / 1000
-            zl.observe(now, temp, outdoor, quiet=not boiler_on and not open_rads,
-                       heating=boiler_on and bool(open_rads), delivered_kw=kw)
+            zl.observe(now, temp, outdoor, quiet=quiet,
+                       heating=boiler_on and bool(open_rads), delivered_kw=kw,
+                       label=time.strftime("%d/%m %H:%M", time.localtime(now)))
         hour = int(now // 3600)
         if self._last_hour is not None and hour != self._last_hour:
             label = time.strftime("%d/%m %H:%M", time.localtime(now))
@@ -572,6 +594,71 @@ class SmartHeatingCoordinator:
                     f"{name} radiator valve had been changed to {was}; set back to "
                     f"{'open' if expected == s.open_temp else 'closed'}. Use Boost in the Heating panel "
                     f"to warm a room instead."))
+
+    async def _notify_boiler(self, decision: Decision, now: float) -> None:
+        """Optional notification each time the boiler is switched on or off."""
+        was, self._boiler_wanted = self._boiler_wanted, decision.boiler_on
+        if was is None or was == decision.boiler_on:
+            if was is None and decision.boiler_on:
+                self._boiler_on_since = now
+            return
+        ran = None
+        if decision.boiler_on:
+            self._boiler_on_since = now
+        elif self._boiler_on_since is not None:
+            ran = now - self._boiler_on_since
+            self._boiler_on_since = None
+        if not self.config.settings.notify_boiler:
+            return
+        today = self.energy.days.get(time.strftime("%Y-%m-%d", time.localtime(now)))
+        total = _duration(today.hours * 3600 if today else 0.0)
+        if decision.boiler_on:
+            msg = f"Boiler on: {decision.reason}. {total} so far today."
+        else:
+            this_run = f"Ran {_duration(ran)}; " if ran is not None else ""
+            msg = f"Boiler off: {decision.reason}. {this_run}{total} today."
+        await self._notify(Notification("boiler", msg))
+
+    async def _daily_summary(self, now: float) -> None:
+        """Once a day, at the chosen time: boiler time, runs and cost today, and tomorrow's forecast."""
+        s = self.config.settings
+        try:
+            hh, mm = (int(x) for x in s.daily_summary_time.split(":"))
+        except (AttributeError, ValueError):
+            return
+        lt = time.localtime(now)
+        date = time.strftime("%Y-%m-%d", lt)
+        due = (lt.tm_hour, lt.tm_min) >= (hh, mm)
+        if self._summary_date is None:
+            # Just started: a summary already due today was sent before the restart
+            self._summary_date = date if due else ""
+            return
+        if not due or self._summary_date == date or not s.notify_daily_summary:
+            return
+        self._summary_date = date
+        await self._notify(Notification("summary", self.summary_message(now)))
+
+    def summary_message(self, now: float) -> str:
+        date = time.strftime("%Y-%m-%d", time.localtime(now))
+        tomorrow = time.strftime("%Y-%m-%d", time.localtime(now + 86400))
+        rec = self.energy.days.get(date)
+        summary = self.energy_cache or self.energy_summary()
+        today = summary["today"]
+        runs = rec.runs if rec else 0
+        parts = [f"Boiler on {_duration(rec.hours * 3600 if rec else 0)} today over "
+                 f"{runs} run{'' if runs == 1 else 's'}"]
+        if today.get("cost") is not None:
+            parts[0] += f", about £{today['cost']:.2f} ({today['gas_kwh']:g} kWh of gas)"
+        parts[0] += "."
+        if rec and rec.out_mean is not None:
+            parts.append(f"Outside averaged {rec.out_mean:.1f}°.")
+        nxt = next((d for d in summary["forecast"].get("days", []) if d["date"] == tomorrow), None)
+        if nxt is not None:
+            line = f"Tomorrow: {nxt['outdoor']:g}° forecast, about {_duration(nxt['hours'] * 3600)} of boiler"
+            if nxt.get("cost") is not None:
+                line += f", £{nxt['cost']:.2f}"
+            parts.append(line + ".")
+        return " ".join(parts)
 
     async def _notify(self, note: Notification) -> None:
         entry = {"time": time.time(), "kind": note.kind, "message": note.message,

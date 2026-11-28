@@ -16,6 +16,7 @@ TICK_SECONDS = 60
 STARTUP_GRACE_SECONDS = 300  # no 'sensor offline' alerts this soon after a restart
 VERIFY_AFTER_SECONDS = 120
 MAX_ATTEMPTS = 3
+QUIET_AFTER_SECONDS = 900  # boiler off this long: rooms count as cooling naturally, valves open or not
 
 PLATFORMS = ["select", "switch", "sensor", "binary_sensor"]
 

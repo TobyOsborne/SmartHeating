@@ -3,7 +3,7 @@ const TABS = [
   ["now", "Now"], ["profiles", "Profiles"], ["zones", "Zones"],
   ["radiators", "Radiators"], ["learning", "Learning"], ["costs", "Costs & flow"], ["settings", "Settings"],
 ];
-const MODES = [["auto", "Auto"], ["manual", "Manual"], ["off", "Off"], ["frost", "Frost"]];
+const MODES = [["auto", "Auto"], ["manual", "Manual"], ["off", "Off"]];
 const SPARE = [
   ["primary_only", "Primary only", "Only the primary zone's radiators open"],
   ["buffer_zones", "Buffer zones", "Rooms marked as buffers open whenever the boiler runs"],
@@ -282,8 +282,10 @@ class SmartHeatingPanel extends HTMLElement {
     const t = this._targets();
     const order = p ? [p.primary_zone, ...p.priority.map((e) => e.zone).filter((z) => z !== p.primary_zone)] : [];
     const rest = Object.keys(D.zones).filter((z) => !order.includes(z));
+    // In Auto only the primary room starts the boiler, so a boost can only steer a run already going.
+    const canBoost = rt.mode === "manual" || (rt.mode === "auto" && dec.boiler_on);
     const zoneRow = (z) => {
-      const info = D.zones[z], tt = t[z] || {}, b = this._boost[z];
+      const info = D.zones[z], tt = t[z] || {}, b = canBoost ? this._boost[z] : null;
       const zr = (D.config.zones.find((x) => x.name === z) || { radiators: [] }).radiators;
       const zmin = (D.config.zones.find((x) => x.name === z) || {}).minimum;
       const openN = zr.filter((r) => D.radiators[r] && D.radiators[r].open).length;
@@ -293,10 +295,10 @@ class SmartHeatingPanel extends HTMLElement {
         <div class="temp">${num(info.temperature)}°<span class="sub"> / ${tt.target != null ? num(tt.target) + "°" : "–"}</span></div>
         <span class="chip ${esc(info.state)}">${esc(STATE_LABEL[info.state] || info.state || "–")}</span>
         ${info.boost ? `<button class="small ghost" data-act="boost-cancel" data-zone="${esc(z)}">End boost</button>`
-                     : `<button class="small ghost" data-act="boost-open" data-zone="${esc(z)}">Boost</button>`}
+                     : canBoost ? `<button class="small ghost" data-act="boost-open" data-zone="${esc(z)}">Boost</button>` : ""}
       </div>
       ${b ? `<div class="row boost">
-        <label>Target °C <input id="bt-${esc(z)}" type="number" step="0.5" data-boost="target" data-zone="${esc(z)}" value="${esc(b.target)}" placeholder="${tt.target ?? ""}"></label>
+        <label>Target °C <input id="bt-${esc(z)}" type="number" step="0.5" data-boost="target" data-zone="${esc(z)}" value="${esc(b.target)}" placeholder="${tt.target ?? (p ? p.goal : "")}"></label>
         <label>For (min, 0 = until profile changes) <input id="bm-${esc(z)}" type="number" min="0" step="15" data-boost="minutes" data-zone="${esc(z)}" value="${esc(b.minutes)}"></label>
         <button class="primary small" data-act="boost-go" data-zone="${esc(z)}">Start boost</button></div>` : ""}`;
     };
@@ -321,7 +323,8 @@ class SmartHeatingPanel extends HTMLElement {
         <div class="sub caprow"><span>Open capacity <b>${num(cap, 2)} kW</b></span><span>Boiler needs <b>${num(need, 2)} kW</b></span></div>
         <div class="facts"><span>Flow ${num(D.flow_temp, 0)}°C</span><span>Outside ${num(D.outdoor)}°C</span>${p ? `<span>Spare heat: ${esc((SPARE.find((s) => s[0] === p.spare_heat) || [])[1] || p.spare_heat)}</span>` : ""}</div>
       </section>
-      <section class="card"><h2>Rooms</h2>${order.map(zoneRow).join("")}
+      <section class="card"><h2>Rooms</h2>${canBoost ? "" : `<p class="hint">${rt.mode === "auto"
+          ? "Boost is available while the boiler is running, or in Manual mode." : "Boost is available in Auto (while the boiler is running) and Manual mode."}</p>`}${order.map(zoneRow).join("")}
         ${rest.length ? `<h3>Not in this profile</h3>${rest.map(zoneRow).join("")}` : ""}</section>
       <section class="card"><h2>Radiators</h2>${rads.map(([n, r]) => `<div class="row">
           <span class="dot ${r.open ? "open" : ""}"></span>
@@ -485,6 +488,11 @@ class SmartHeatingPanel extends HTMLElement {
       <section class="card"><h2>Radiator valves</h2>
         <label class="inline"><input type="checkbox" data-f="settings.correct_trv_drift" ${s.correct_trv_drift !== false ? "checked" : ""}> Put back valves changed by hand, by their own schedule or after a power cut</label>
         <p class="hint">Checked every minute. You get one notification per valve each time it happens. To warm a room for a while, use Boost on the Now tab instead.</p></section>
+      <section class="card"><h2>Notifications</h2>
+        <label class="inline"><input type="checkbox" data-f="settings.notify_boiler" ${s.notify_boiler ? "checked" : ""}> Notify me when the boiler turns on or off</label>
+        <p class="hint">Each notification says why, how long that run lasted and the boiler's total time today. They replace each other on your phone rather than piling up.</p>
+        <label class="inline"><input type="checkbox" data-f="settings.notify_daily_summary" ${s.notify_daily_summary ? "checked" : ""}> Send a daily summary at <input id="s-sumt" type="time" data-f="settings.daily_summary_time" value="${esc(s.daily_summary_time || "21:00")}"></label>
+        <p class="hint">Boiler time and number of runs today, the estimated cost, and tomorrow's forecast.</p></section>
       <section class="card"><h2>Sensors</h2><div class="grid">
         <label>Outdoor temperature <input id="s-out" list="temps" data-f="settings.outdoor_sensor" value="${esc(s.outdoor_sensor)}"></label>
         <label>Weather (for the cost forecast) <input id="s-wx" data-f="settings.weather_entity" value="${esc(s.weather_entity)}"></label>

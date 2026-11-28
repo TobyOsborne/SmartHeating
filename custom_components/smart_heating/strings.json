@@ -28,7 +28,7 @@
   "services": {
     "set_profile": {"name": "Set profile", "description": "Switch the running heating profile.",
       "fields": {"profile": {"name": "Profile", "description": "Profile name."}}},
-    "set_mode": {"name": "Set mode", "description": "Auto, Manual, Off or Frost.",
+    "set_mode": {"name": "Set mode", "description": "Auto, Manual or Off. Frost protection runs in every mode.",
       "fields": {"mode": {"name": "Mode", "description": "Heating mode."}}},
     "boost": {"name": "Boost zone", "description": "Raise a zone's target and/or move it up the priority list for a while.",
       "fields": {

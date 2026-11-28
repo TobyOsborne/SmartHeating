@@ -9,7 +9,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .entity import SmartHeatingEntity
 from .model import Mode
 
-MODE_LABELS = {Mode.AUTO: "Auto", Mode.MANUAL: "Manual", Mode.OFF: "Off", Mode.FROST: "Frost"}
+MODE_LABELS = {Mode.AUTO: "Auto", Mode.MANUAL: "Manual", Mode.OFF: "Off"}
 
 
 async def async_setup_entry(hass: HomeAssistant, entry, async_add_entities: AddEntitiesCallback) -> None:

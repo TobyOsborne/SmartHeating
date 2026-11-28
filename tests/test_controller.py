@@ -224,7 +224,7 @@ def test_frost_heats_cold_zone_in_auto_even_when_primary_satisfied():
     cfg = seed_config()
     d, state = tick(cfg, make_inputs(cfg, COLD | {"Office": 19.0, "Guest Bedroom": 6.5}))
     assert d.boiler_on
-    assert "Guest Bedroom" in d.open
+    assert d.open == set(cfg.radiators)  # every radiator, so the boiler runs one long burn
     # keeps heating until 8° (7 + 1 release)
     d, state = tick(cfg, make_inputs(cfg, COLD | {"Office": 19.0, "Guest Bedroom": 7.5}, boiler_on=True), state)
     assert "Guest Bedroom" in d.open
@@ -232,18 +232,78 @@ def test_frost_heats_cold_zone_in_auto_even_when_primary_satisfied():
     assert "Guest Bedroom" not in d.open
 
 
-def test_frost_mode_only_heats_frost_zones():
+def test_off_mode_still_protects_against_frost():
     cfg = seed_config()
-    d, _ = tick(cfg, make_inputs(cfg, COLD, mode=Mode.FROST))
+    d, _ = tick(cfg, make_inputs(cfg, COLD, mode=Mode.OFF, boiler_on=True, open_={"Office"}))
+    assert not d.boiler_on and d.open == set()  # off straight away, no minimum run
+    d, st = tick(cfg, make_inputs(cfg, COLD | {"Bathroom": 6.0}, mode=Mode.OFF))
+    assert d.boiler_on and d.open == set(cfg.radiators) and "frost protection" in d.reason  # all open
+    # Frost stops once the room is back above frost temperature + release
+    d, _ = tick(cfg, make_inputs(cfg, COLD | {"Bathroom": 8.5}, mode=Mode.OFF, boiler_on=True,
+                                 open_=set(cfg.radiators)), st)
     assert not d.boiler_on and d.open == set()
-    d, _ = tick(cfg, make_inputs(cfg, COLD | {"Bathroom": 6.0}, mode=Mode.FROST))
-    assert d.boiler_on and d.open == {"Bathroom"}
+
+
+def test_manual_mode_still_protects_against_frost():
+    cfg = seed_config()
+    d, st = tick(cfg, make_inputs(cfg, COLD | {"Bathroom": 6.0}, mode=Mode.MANUAL, open_={"Kitchen"}))
+    assert d.boiler_on and d.open == set(cfg.radiators)
+    d, _ = tick(cfg, make_inputs(cfg, COLD | {"Bathroom": 8.5}, mode=Mode.MANUAL, boiler_on=True,
+                                 open_=set(cfg.radiators)), st)
+    assert not d.boiler_on and d.open == {"Kitchen"}  # puts back what it changed, leaves the rest
+
+
+def test_boost_without_target_on_unlisted_zone_heats_to_goal():
+    cfg = seed_config()
+    prof = apply_overrides(cfg.profiles["Office"], [Override("Bathroom", expires_at=NOW + 600)], NOW)
+    entry = next(e for e in prof.priority if e.zone == "Bathroom")
+    assert entry.target == cfg.profiles["Office"].goal
 
 
 def test_manual_mode_touches_nothing():
     cfg = seed_config()
     d, _ = tick(cfg, make_inputs(cfg, COLD, mode=Mode.MANUAL, boiler_on=True, open_={"Kitchen"}))
     assert d.boiler_on and d.open == {"Kitchen"}
+    d, _ = tick(cfg, make_inputs(cfg, COLD, mode=Mode.MANUAL, boiler_on=False, open_={"Kitchen"}))
+    assert not d.boiler_on and d.open == {"Kitchen"}
+
+
+def test_manual_mode_boost_runs_boiler_then_puts_things_back():
+    cfg = seed_config()
+    boost = [Override("Office", target=20.0, expires_at=NOW + 3600, profile="Office")]
+    # Office at 17° boosted to 20°: its radiator opens and the boiler starts; Kitchen (opened by hand) stays
+    d, st = tick(cfg, make_inputs(cfg, COLD, mode=Mode.MANUAL, open_={"Kitchen"}, overrides=boost))
+    assert d.boiler_on and d.open == {"Kitchen", "Office"}
+    assert "boosting Office" in d.reason and d.zone_states["Office"] == "heating"
+    # Office reaches 20°: boiler off (it ran long enough) and the radiator it opened closes
+    warm = COLD | {"Office": 20.1}
+    d, st = tick(cfg, make_inputs(cfg, warm, mode=Mode.MANUAL, boiler_on=True, open_={"Kitchen", "Office"},
+                                  overrides=boost), st)
+    assert not d.boiler_on and d.open == {"Kitchen"}
+
+
+def test_manual_mode_boost_respects_boiler_minimums():
+    cfg = seed_config()
+    boost = [Override("Office", target=20.0, expires_at=NOW + 3600, profile="Office")]
+    d, _ = tick(cfg, make_inputs(cfg, COLD, mode=Mode.MANUAL, boiler_changed=NOW - 60, overrides=boost))
+    assert not d.boiler_on and "minimum off time" in d.reason
+    assert "Office" in d.open  # radiator opens ready
+
+
+def test_manual_mode_boost_does_not_turn_off_a_boiler_turned_on_by_hand():
+    cfg = seed_config()
+    boost = [Override("Office", target=20.0, expires_at=NOW + 3600, profile="Office")]
+    warm = COLD | {"Office": 20.5}
+    d, _ = tick(cfg, make_inputs(cfg, warm, mode=Mode.MANUAL, boiler_on=True, overrides=boost))
+    assert d.boiler_on
+
+
+def test_manual_mode_boost_without_target_uses_profile_goal():
+    cfg = seed_config()
+    goal = cfg.profiles["Office"].goal
+    boost = [Override("Office", expires_at=NOW + 3600, profile="Office")]
+    d, _ = tick(cfg, make_inputs(cfg, COLD | {"Office": goal - 1}, mode=Mode.MANUAL, overrides=boost))
+    assert d.boiler_on
 
 
 # ------------------------------------------------------------ overrides and notifications

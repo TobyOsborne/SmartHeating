@@ -14,7 +14,7 @@ and shows what it would do, but sends nothing to the boiler or the TRVs. Turn of
 | Entity | Shows |
 | --- | --- |
 | `select.smart_heating_profile` | Running profile |
-| `select.smart_heating_mode` | Auto, Manual, Off or Frost |
+| `select.smart_heating_mode` | Auto, Manual or Off (frost protection runs in all three) |
 | `switch.smart_heating_dry_run` | On = decide and display only |
 | `binary_sensor.smart_heating_boiler` | Whether the boiler should be on |
 | `binary_sensor.smart_heating_<radiator>_open` | Each radiator, with its reason and modelled kW |
@@ -91,3 +91,30 @@ The **Costs & flow** tab and four sensors:
 Each day's boiler hours and mean outdoor temperature are stored; the smart meter's "last full day" gas
 is filed against its day when it arrives. Base and burn rate are learned after 4 days with differing
 heating; the forecast after 4 full days. The meter and weather entities are set in Settings.
+
+## Boost, frost, learning and notifications (0.6.0)
+
+- **Frost protection is always on.** It is no longer a mode: in Auto, Manual and Off, any room
+  below the frost temperature opens every radiator in the house and runs the boiler until that
+  room is back above it. Opening them all gives the boiler one long burn rather than short runs
+  for one room after another.
+  A stored Frost mode becomes Off, which now does the same job.
+- **Boost works in Manual mode.** Manual still leaves the radiators and boiler alone, except for
+  boosts (and frost): a boosted room below its target (the boost's target, else the profile's
+  target for that room, else the profile goal) opens its radiators and runs the boiler, with the
+  usual minimum on/off times. When it reaches target or the boost ends, the radiators it opened
+  close again, and the boiler goes off only if the boost turned it on.
+- **Boost in Auto only shows while the boiler runs.** In Auto only the primary room starts the
+  boiler, so a boost steers a run that is already going. The panel hides the button otherwise
+  (the `boost` service still works for automations). A boost with no target on a room outside
+  the profile now heats it to the profile goal rather than doing nothing.
+- **Warm-up rate learns from each heating run.** It used to need the boiler on for a whole clock
+  hour, which real 15–25 minute runs never managed. Now each run is used: the first 5 minutes are
+  skipped while radiators heat up, then the room's temperature slope (with the cooling it would have
+  done added back) gives °C/h per kW. Runs need 12 minutes of usable data and count by their length.
+- **Cooling is learned in every room.** A room counts as cooling naturally once the boiler has been
+  off 15 minutes, whether or not its valves are open, so the primary room (whose valves stay open
+  between runs) learns too.
+- **Notifications** (Settings → Notifications, both off by default): the boiler turning on or off
+  (why, how long that run lasted, total today), and a daily summary at a chosen time (boiler time
+  and runs today, estimated cost, tomorrow's forecast).

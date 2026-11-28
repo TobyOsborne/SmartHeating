@@ -63,11 +63,11 @@ async def test_set_changes_profile_and_mode(hass: HomeAssistant, hass_ws_client)
     _world(hass)
     entry = await _setup(hass)
     ws = await hass_ws_client(hass)
-    await ws.send_json({"id": 1, "type": "smart_heating/set", "profile": "Living Room", "mode": "frost"})
+    await ws.send_json({"id": 1, "type": "smart_heating/set", "profile": "Living Room", "mode": "manual"})
     msg = await ws.receive_json()
     assert msg["success"], msg
     assert entry.runtime_data.runtime.profile == "Living Room"
-    assert msg["result"]["runtime"]["mode"] == "frost"
+    assert msg["result"]["runtime"]["mode"] == "manual"
     await ws.send_json({"id": 2, "type": "smart_heating/set", "profile": "Nope"})
     assert not (await ws.receive_json())["success"]
 

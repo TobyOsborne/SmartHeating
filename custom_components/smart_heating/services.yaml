@@ -11,7 +11,7 @@ set_mode:
       required: true
       selector:
         select:
-          options: [auto, manual, "off", frost]
+          options: [auto, manual, "off"]
 boost:
   fields:
     zone:

@@ -46,6 +46,7 @@ class DayRecord:
     gas_kwh: float | None = None  # from the smart meter, when it arrives
     cost: float | None = None
     tracked_s: float = 0.0  # how much of the day was actually recorded
+    runs: int = 0  # times the boiler came on
 
     @property
     def full(self) -> bool:
@@ -77,6 +78,9 @@ class EnergyLedger:
 
     def add_runtime(self, date: str, seconds: float) -> None:
         self.day(date).hours += seconds / 3600
+
+    def add_run(self, date: str) -> None:
+        self.day(date).runs += 1
 
     def add_tracked(self, date: str, seconds: float) -> None:
         self.day(date).tracked_s += seconds

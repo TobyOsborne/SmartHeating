@@ -6,15 +6,19 @@ Cooling model (same maths as the Pi's "Cooling Model Learn/Estimate" scripts):
 - g: free-heat offset, how far above outdoors the zone settles with no heating
 
 Each hourly sample is the 2-hour temperature change across three hourly means
-against the indoor-outdoor gap, taken only in quiet hours (boiler off and none
-of the zone's radiators open). Samples go into exponentially weighted sums
+against the indoor-outdoor gap, taken only in quiet hours (boiler off for at least
+15 minutes, so the radiators have cooled). Samples go into exponentially weighted sums
 (L = 0.997 per sample, roughly a four-week memory). A Bayesian grid over
 half-life (6 h to ~470 h) and free heat (0 to 8 °C), with gentle priors
 (half-life about 48 h, free heat about 3 °C), turns the sums into a best
 estimate with uncertainty and a confidence percentage.
 
-Warm-up rate: °C per hour per kW of modelled radiator output, learned from
-hours when the zone's radiators were open and the boiler ran the whole hour.
+Warm-up rate: °C per hour per kW of modelled radiator output, learned from each
+heating run (boiler on and a radiator of the zone open). The first few minutes,
+while the radiators warm up, are skipped; the rest of the run (in chunks of up to
+an hour) gives the slope of the room's temperature, with the cooling it would have
+done added back. Runs are weighted by their length, so a 15-minute run counts a
+quarter as much as an hour.
 
 Pure Python, no Home Assistant imports.
 """
@@ -25,6 +29,10 @@ import math
 from dataclasses import asdict, dataclass, field
 
 FORGET = 0.997
+WARMUP_LAG_S = 300  # skip this much of each run while the radiators heat up
+WARMUP_MIN_S = 720  # a run needs this much after the lag to teach anything
+WARMUP_CHUNK_S = 3600  # long runs are learned from in chunks of this length
+WARMUP_GAP_S = 600  # no reading for this long breaks a run
 
 
 @dataclass
@@ -124,9 +132,10 @@ class WarmupStats:
     total: float = 0.0
     last: str = ""
 
-    def add(self, rate_per_kw: float, when: str = "") -> None:
-        self.n = self.n * FORGET + 1
-        self.total = self.total * FORGET + rate_per_kw
+    def add(self, rate_per_kw: float, when: str = "", weight: float = 1.0) -> None:
+        """Add one sample; weight is the heating hours it covers."""
+        self.n = self.n * FORGET + weight
+        self.total = self.total * FORGET + rate_per_kw * weight
         self.last = when
 
     @property
@@ -146,7 +155,7 @@ class HourSlot:
     temp_sum: float = 0.0
     out_sum: float = 0.0
     count: int = 0
-    quiet: bool = True  # boiler off and no radiator of the zone open all hour
+    quiet: bool = True  # boiler off (and its radiators cooled) all hour
     heating: bool = True  # boiler on and a radiator of the zone open all hour
     kw_sum: float = 0.0  # modelled kW delivered, summed over ticks
 
@@ -156,6 +165,8 @@ class ZoneLearning:
     cooling: CoolingSums = field(default_factory=CoolingSums)
     warmup: WarmupStats = field(default_factory=WarmupStats)
     hours: dict[int, HourSlot] = field(default_factory=dict)  # hour index -> slot (not persisted)
+    run_start: float | None = None  # when the current heating run began (not persisted)
+    run: list[tuple[float, float, float, float]] = field(default_factory=list)  # (t, temp, out, kW)
 
     def to_dict(self) -> dict:
         return {"cooling": asdict(self.cooling), "warmup": asdict(self.warmup)}
@@ -172,10 +183,11 @@ class ZoneLearning:
     # ------------------------------------------------------------ sampling
 
     def observe(self, now: float, temp: float | None, outdoor: float | None, quiet: bool,
-                heating: bool, delivered_kw: float) -> None:
-        """Called every tick. Groups readings into clock hours."""
+                heating: bool, delivered_kw: float, label: str = "") -> None:
+        """Called every tick. Groups readings into clock hours and follows heating runs."""
         if temp is None or outdoor is None:
             return
+        self._follow_run(now, temp, outdoor, heating, delivered_kw, label)
         hour = int(now // 3600)
         slot = self.hours.setdefault(hour, HourSlot())
         slot.temp_sum += temp
@@ -201,17 +213,48 @@ class ZoneLearning:
                 x = m[1] - out
                 if -1.5 <= rate <= 0.3:
                     self.cooling.add(x, rate, label)
-        # Warm-up: the last hour, if heated the whole hour
-        last, before = self.hours.get(h2), self.hours.get(h1)
-        if last and before and last.count >= 20 and before.count >= 20 and last.heating:
-            kw = last.kw_sum / last.count
-            rise = last.temp_sum / last.count - before.temp_sum / before.count
-            if kw > 0.1 and -0.5 < rise < 5:
-                # Add back what it would have lost by cooling, using the current model
-                est = estimate(self.cooling)
-                out = last.out_sum / last.count
-                loss = est.cooling_rate(before.temp_sum / before.count, out) if self.cooling.n > 5 else 0.0
-                self.warmup.add((rise + loss) / kw, label)
+
+    # ------------------------------------------------------------ warm-up
+
+    def _follow_run(self, now: float, temp: float, outdoor: float, heating: bool, kw: float, label: str) -> None:
+        if self.run and now - self.run[-1][0] > WARMUP_GAP_S:
+            self.run, self.run_start = [], None  # readings stopped: don't bridge the gap
+        if not heating:
+            if self.run_start is not None:
+                self._learn_run(label)
+            self.run, self.run_start = [], None
+            return
+        if self.run_start is None:
+            self.run_start = now
+        if now - self.run_start < WARMUP_LAG_S:
+            return
+        self.run.append((now, temp, outdoor, kw))
+        if now - self.run[0][0] >= WARMUP_CHUNK_S:
+            self._learn_run(label)
+            self.run = [self.run[-1]]
+
+    def _learn_run(self, label: str) -> None:
+        """Learn °C/h per kW from the readings of one heating run (or one chunk of it)."""
+        pts = self.run
+        if len(pts) < 5:
+            return
+        span = pts[-1][0] - pts[0][0]
+        if span < WARMUP_MIN_S:
+            return
+        n = len(pts)
+        t_mean = sum(p[0] for p in pts) / n
+        temp_mean = sum(p[1] for p in pts) / n
+        sxx = sum((p[0] - t_mean) ** 2 for p in pts)
+        if sxx <= 0:
+            return
+        slope = sum((p[0] - t_mean) * (p[1] - temp_mean) for p in pts) / sxx * 3600  # °C/h
+        kw = sum(p[3] for p in pts) / n
+        out = sum(p[2] for p in pts) / n
+        if kw <= 0.1 or not -0.5 < slope < 5:
+            return
+        # Add back what it would have lost by cooling, using the current model
+        loss = estimate(self.cooling).cooling_rate(temp_mean, out) if self.cooling.n > 5 else 0.0
+        self.warmup.add((slope + loss) / kw, label, weight=span / 3600)
 
 
 def seed_from_pi(raw: dict) -> ZoneLearning:

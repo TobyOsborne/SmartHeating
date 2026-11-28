@@ -66,6 +66,28 @@ def test_heating_hours_are_not_cooling_samples_but_teach_warm_up():
     assert 1.0 <= zl.warmup.mean <= 1.4  # about 1.2 °C/h per kW once cooling is added back
 
 
+def test_warm_up_learns_from_short_runs():
+    """Real runs last 15-25 minutes and never fill a clock hour; they must still teach warm-up."""
+    k, g = math.log(2) / 30, 2.0
+    zl = ZoneLearning()
+    t0 = 0.0
+    for night in range(25):
+        _simulate(zl, 10, k=k, g=g, start=19.0 - (night % 4), t0=t0, outdoor_fn=lambda t: 4 + 3 * math.sin(t / 20000))
+        t0 += 24 * 3600
+    temp = 16.0
+    for run in range(30):
+        # 20 minutes on, starting at :40 so no run fills a clock hour, then 2 h off
+        start = t0 + run * 3 * 3600 + 40 * 60
+        for minute in range(140):
+            now = start + minute * 60
+            heating = minute < 20
+            temp += (-k * (temp - (5.0 + g)) + (1.2 * 1.5 if heating else 0)) / 60
+            zl.observe(now, temp, 5.0, quiet=not heating, heating=heating, delivered_kw=1.5 if heating else 0)
+    assert zl.warmup.n >= 3  # weighted by hours: 30 runs x 15 usable minutes, less forgetting
+    assert 1.0 <= zl.warmup.mean <= 1.4
+    assert zl.warmup.confidence > 20
+
+
 def test_round_trips_through_storage():
     zl = seed_from_pi(PI_COOLING["Kitchen"])
     zl.warmup.add(1.1)
